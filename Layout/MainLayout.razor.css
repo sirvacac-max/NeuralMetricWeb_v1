@@ -1,0 +1,12 @@
+.app{min-height:100vh;display:flex;flex-direction:column;}
+.topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:saturate(1.2) blur(8px);border-bottom:1px solid var(--line);}
+.topbar-inner{max-width:var(--maxw);margin:0 auto;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.brand{display:flex;align-items:center;gap:10px;min-width:0;}
+.brand-glyph{width:34px;height:20px;color:var(--accent);flex:none;}
+.brand-name{font-weight:600;font-size:1rem;letter-spacing:-.01em;color:var(--ink);white-space:nowrap;}
+.topbar-right{display:flex;align-items:center;gap:10px;}
+.chip-research{font-size:.75rem;font-weight:500;color:var(--warn);background:var(--warn-wash);border:1px solid color-mix(in srgb,var(--warn) 22%,transparent);padding:3px 10px;border-radius:999px;white-space:nowrap;}
+.theme-btn{font:inherit;font-size:1rem;line-height:1;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:8px;cursor:pointer;}
+.theme-btn:hover{background:var(--surface-2);}
+.main{flex:1;}
+@media (max-width:420px){.chip-research{display:none;}}

@@ -1,0 +1,28 @@
+## .NET / Visual Studio build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+publish/
+*.user
+*.suo
+
+## Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+
+## Blazor / WASM publish artifacts
+wwwroot/_framework/
+*.br
+*.gz
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## NuGet
+*.nupkg
+packages/

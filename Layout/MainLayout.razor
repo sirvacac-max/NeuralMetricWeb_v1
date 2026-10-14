@@ -1,0 +1,63 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject IJSRuntime JS
+@inject NeuralMetricWeb_v1.Services.Localization L
+
+<div class="app">
+    <header class="topbar">
+        <div class="topbar-inner">
+            <div class="brand">
+                <svg class="brand-glyph" viewBox="0 0 48 24" fill="none" aria-hidden="true">
+                    <path d="M1 12 H9 l2 -8 3 15 2 -10 2 6 2 -3 h5 l2 7 3 -13 2 9 2 -4 H46"
+                          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="brand-name">NeuralMetric Web</span>
+            </div>
+            <div class="topbar-right">
+                <span class="chip-research">@L["Educational & research"]</span>
+                <button class="theme-btn" @onclick="ToggleLang" aria-label="Language" title="@($"Language: {L.Lang}")">@L.Lang.ToUpperInvariant()</button>
+                <button class="theme-btn" @onclick="CycleTheme"
+                        aria-label="@($"Theme: {_theme}. Click to change.")" title="@($"Theme: {_theme}")">
+                    @_glyph
+                </button>
+            </div>
+        </div>
+    </header>
+    <main class="main" id="main">
+        <div class="container">
+            @Body
+        </div>
+    </main>
+</div>
+
+@code {
+    private string _theme = "auto";
+    private string _glyph => _theme switch { "light" => "☀", "dark" => "☾", _ => "◐" };
+
+    protected override void OnInitialized() => L.OnChange += Render;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try { _theme = await JS.InvokeAsync<string>("themeInit"); } catch { }
+            try { L.Set(await JS.InvokeAsync<string>("langInit")); } catch { }
+            StateHasChanged();
+        }
+    }
+
+    private async Task CycleTheme()
+    {
+        try { _theme = await JS.InvokeAsync<string>("themeCycle"); } catch { }
+    }
+
+    private async Task ToggleLang()
+    {
+        var next = L.Lang == "en" ? "es" : "en";
+        try { await JS.InvokeAsync<string>("langSet", next); } catch { }
+        L.Set(next);
+    }
+
+    private void Render() => InvokeAsync(StateHasChanged);
+    public void Dispose() => L.OnChange -= Render;
+}

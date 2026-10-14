@@ -1,0 +1,111 @@
+@page "/methods"
+@inject NeuralMetricWeb_v1.Services.Localization L
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="method-actions no-print">
+    <a class="btn" href="">&larr; @L["Back"]</a>
+</div>
+
+<article class="method-sheet">
+    @if (L.Lang == "es")
+    {
+        <h2>EEG analysis &mdash; metodolog&iacute;a</h2>
+        <p class="method-lead">NeuralMetric Web &mdash; an&aacute;lisis de EEG procesado de un solo canal, ejecutado localmente en el navegador. Solo para fines educativos y de investigaci&oacute;n.</p>
+
+        <h3>Origen de la se&ntilde;al</h3>
+        <p>Un solo canal frontal, reconstruido a microvoltios. Las sesiones SedLine se leen del EDF; las exportaciones crudas de BIS Vista se leen del tr&iacute;o .h_a / .r2a / .spa (int16 intercalado little-endian, ganancia y desplazamiento del encabezado de 2048 bytes, &micro;V = (AD &minus; offset) &times; ganancia; tiempo desde el .spa de 1 Hz). El lector BIS se valid&oacute; bit a bit contra la herramienta del fabricante [6]. Todo el procesamiento es de un canal y se ejecuta localmente; ninguna se&ntilde;al sale del dispositivo.</p>
+
+        <h3>Filtrado</h3>
+        <p>Butterworth pasa-banda de 4.&ordm; orden y fase cero (ida y vuelta), 0.5&ndash;40 Hz, seguido de un notch de 60 Hz (factor de calidad Q = 30; 50 Hz en regiones con red de 50 Hz). El filtrado de fase cero evita la distorsi&oacute;n de fase de la onda [Rampil 1998].</p>
+
+        <h3>Limpieza de la se&ntilde;al (control de calidad)</h3>
+        <p>El registro se divide en ventanas de 4 s con 50&nbsp;% de solapamiento. Una ventana se excluye si est&aacute; plana (DE &lt; 0.5 &micro;V), de alta amplitud (alguna muestra &gt; 150 &micro;V), saturada (en los l&iacute;mites digitales del equipo) o &laquo;atascada&raquo; (un valor crudo id&eacute;ntico mantenido &ge; 1 s). Solo las ventanas v&aacute;lidas por QC entran al an&aacute;lisis espectral y al compuesto; las muestras saturadas o atascadas se marcan como indeterminadas y se excluyen del denominador de supresi&oacute;n.</p>
+
+        <h3>An&aacute;lisis espectral</h3>
+        <p>La densidad espectral de potencia se estima por el m&eacute;todo de Welch sobre ventanas v&aacute;lidas de 4 s con ventana de Hann (un solo lado, en &micro;V&sup2;/Hz) [Welch 1967]. La potencia absoluta de banda es la integral de la PSD en &micro;V&sup2; sobre &delta; 0.5&ndash;4, &theta; 4&ndash;8, &alpha; 8&ndash;12 y &beta; 12&ndash;30 Hz; la potencia relativa es cada banda como porcentaje de la potencia total 0.5&ndash;30 Hz. La frecuencia l&iacute;mite espectral (SEF95) es la frecuencia por debajo de la cual se encuentra el 95&nbsp;% de la potencia de 0.5&ndash;30 Hz [Rampil 1998; Purdon 2015].</p>
+
+        <h3>Visualizaciones temporales</h3>
+        <p>El arreglo espectral de densidad (DSA) es la PSD mediana de las ventanas v&aacute;lidas por bin de 30 s, 0.5&ndash;30 Hz, en dB re &micro;V&sup2;/Hz, con SEF95 superpuesto. Las tendencias por banda son la potencia por bin de 30 s (dB absoluto o % relativo), suavizadas 5 min en el dominio de potencia solo para visualizaci&oacute;n.</p>
+
+        <h3>Compuesto de profundidad (pEEG)</h3>
+        <p>&Iacute;ndice compuesto de EEG procesado (0&ndash;100) calculado por una reimplementaci&oacute;n abierta del algoritmo openibis de profundidad anest&eacute;sica [Connor 2022]. Es un &iacute;ndice transparente y no propietario para educaci&oacute;n e investigaci&oacute;n; no es BIS ni un dispositivo cl&iacute;nico aprobado.</p>
+
+        <h3>Supresi&oacute;n de r&aacute;fagas (BSR)</h3>
+        <p>Una muestra se clasifica como supresi&oacute;n cuando la longitud de l&iacute;nea local (ventana centrada de 0.28 s) y la amplitud se mantienen bajas (longitud de l&iacute;nea &le; 40 &micro;V, |amplitud| &le; 5 &micro;V) durante al menos 1 s [S&auml;rkel&auml; 2002, adaptado]. El BSR es el porcentaje de EEG determinado en supresi&oacute;n; se informan la tendencia por minuto y las estad&iacute;sticas de episodios.</p>
+    }
+    else
+    {
+        <h2>EEG analysis &mdash; methods</h2>
+        <p class="method-lead">NeuralMetric Web &mdash; single-channel processed-EEG analysis, run locally in the browser. For educational and research use only.</p>
+
+        <h3>Signal source</h3>
+        <p>A single frontal channel, reconstructed to microvolts. SedLine sessions are read from EDF; BIS Vista raw exports are read from the .h_a / .r2a / .spa triplet (little-endian int16 interleaved samples, gain and offset from the 2048-byte header, &micro;V = (AD &minus; offset) &times; gain; timing from the 1-Hz .spa). The BIS reader was validated bit-exact against the vendor tool [6]. All processing is single-channel and runs locally; no signal leaves the device.</p>
+
+        <h3>Filtering</h3>
+        <p>Zero-phase (forward&ndash;backward) 4th-order Butterworth band-pass, 0.5&ndash;40 Hz, followed by a 60 Hz notch (quality factor Q = 30; set to 50 Hz for 50 Hz mains). Zero-phase filtering avoids phase distortion of the waveform [Rampil 1998].</p>
+
+        <h3>Signal cleaning (quality control)</h3>
+        <p>The record is divided into 4-s windows with 50% overlap. A window is excluded if it is flat (SD &lt; 0.5 &micro;V), high-amplitude (any sample &gt; 150 &micro;V), saturated (at the device's digital limits), or &ldquo;stuck&rdquo; (an identical raw value held &ge; 1 s). Only quality-control&ndash;valid windows enter the spectral and composite analyses; saturated/stuck samples are marked indeterminate and excluded from burst-suppression denominators.</p>
+
+        <h3>Spectral analysis</h3>
+        <p>Power spectral density is estimated by Welch's method on quality-control&ndash;valid 4-s Hann-tapered windows (one-sided, &micro;V&sup2;/Hz) [Welch 1967]. Absolute band power is the integral of the PSD in &micro;V&sup2; over &delta; 0.5&ndash;4, &theta; 4&ndash;8, &alpha; 8&ndash;12 and &beta; 12&ndash;30 Hz; relative power is each band as a percentage of total 0.5&ndash;30 Hz power. The spectral edge frequency (SEF95) is the frequency below which 95% of 0.5&ndash;30 Hz power lies [Rampil 1998; Purdon 2015].</p>
+
+        <h3>Time-resolved displays</h3>
+        <p>The density spectral array (DSA) is the median PSD of valid windows per 30-s bin, 0.5&ndash;30 Hz, in dB re &micro;V&sup2;/Hz, with SEF95 overlaid. Band-power trends are per-30-s band power (absolute dB or relative %), smoothed over 5 min in the power domain for display only.</p>
+
+        <h3>Depth composite (pEEG)</h3>
+        <p>A processed-EEG composite index (0&ndash;100) computed by an open reimplementation of the openibis depth-of-anesthesia algorithm [Connor 2022]. This is a transparent, non-proprietary index for education and research; it is not BIS and is not a cleared clinical device.</p>
+
+        <h3>Burst suppression (BSR)</h3>
+        <p>A sample is classified as suppression when the local line length (centred 0.28-s window) and amplitude both stay low (line length &le; 40 &micro;V, |amplitude| &le; 5 &micro;V) for at least 1 s [S&auml;rkel&auml; 2002, adapted]. BSR is the percentage of determinate EEG in suppression; the per-minute trend and episode statistics are reported.</p>
+    }
+
+    @if (L.Lang == "es")
+    {
+        <h3>Registros admitidos</h3>
+        <p>EDF de Masimo SedLine (un canal frontal, p.&nbsp;ej. EEG R1(Fp2)) y exportaci&oacute;n cruda de BIS Vista (archivos .r2a&nbsp;/&nbsp;.h_a&nbsp;/&nbsp;.spa). El formato binario de BIS Vista se decodifica localmente siguiendo una referencia de c&oacute;digo abierto validada muestra por muestra contra el lector del fabricante [intraop-eeg-pipeline 2024]. El canal frontal a analizar es seleccionable; cuando hay datos del monitor (.spa), el BIS/SEF/SR del equipo se muestran junto al compuesto.</p>
+    }
+    else
+    {
+        <h3>Supported recordings</h3>
+        <p>Masimo SedLine EDF (a frontal channel, e.g. EEG R1(Fp2)) and BIS Vista raw export (.r2a&nbsp;/&nbsp;.h_a&nbsp;/&nbsp;.spa files). The BIS Vista binary format is decoded locally following an open-source reference validated sample-by-sample against the vendor reader [intraop-eeg-pipeline 2024]. The frontal channel to analyse is selectable; when monitor data (.spa) is present, the device BIS/SEF/SR are shown alongside the composite.</p>
+    }
+
+    <h3>@L["Settings"]</h3>
+    <table class="method-table">
+        <tbody>
+            <tr><td>@L["Band-pass / notch"]</td><td>0.5&ndash;40 Hz Butterworth (order 4), zero-phase &middot; 60 Hz notch (Q 30)</td></tr>
+            <tr><td>@L["QC window / overlap"]</td><td>4 s / 50%</td></tr>
+            <tr><td>@L["QC gates"]</td><td>flat SD &lt; 0.5 &micro;V &middot; amplitude &gt; 150 &micro;V &middot; saturation &middot; stuck &ge; 1 s</td></tr>
+            <tr><td>@L["Bands (Hz)"]</td><td>&delta; 0.5&ndash;4 &middot; &theta; 4&ndash;8 &middot; &alpha; 8&ndash;12 &middot; &beta; 12&ndash;30 &middot; total 0.5&ndash;30</td></tr>
+            <tr><td>@L["DSA / trend bin"]</td><td>30 s (@L["median PSD"])</td></tr>
+            <tr><td>SEF</td><td>95% @L["of 0.5-30 Hz power"]</td></tr>
+            <tr><td>@L["BSR detector"]</td><td>@L["line length"] &le; 40 &micro;V (0.28 s) &middot; |amp| &le; 5 &micro;V &middot; @L["episode"] &ge; 1 s</td></tr>
+        </tbody>
+    </table>
+
+    <h3>@L["References"]</h3>
+    <ol class="method-refs">
+        <li>Connor CW. Open Reimplementation of the BIS Algorithms for Depth of Anesthesia. <i>Anesth Analg.</i> 2022;135(4):855&ndash;864.</li>
+        <li>S&auml;rkel&auml; M, et al. Automatic Analysis and Monitoring of Burst Suppression in Anesthesia. <i>J Clin Monit Comput.</i> 2002;17(2):125&ndash;134.</li>
+        <li>Purdon PL, Sampson A, Pavone KJ, Brown EN. Clinical Electroencephalography for Anesthesiologists: Part I. <i>Anesthesiology.</i> 2015;123(4):937&ndash;960.</li>
+        <li>Rampil IJ. A Primer for EEG Signal Processing in Anesthesia. <i>Anesthesiology.</i> 1998;89(4):980&ndash;1002.</li>
+        <li>Welch PD. The Use of Fast Fourier Transform for the Estimation of Power Spectra. <i>IEEE Trans Audio Electroacoust.</i> 1967;15(2):70&ndash;73.</li>
+        <li>Intra-operative frontal EEG pipeline &mdash; BIS Vista raw-export reader (binary layout reverse-engineered, validated bit-exact vs the vendor MATLAB reader). <i>GitHub: Tiakat/intraop-eeg-pipeline</i>, 2024.</li>
+        <li>intraop-eeg-pipeline (Tiakat). BIS Vista raw-export reader, validated bit-exact against the vendor MATLAB tool. GitHub, 2024. github.com/Tiakat/intraop-eeg-pipeline</li>
+    </ol>
+
+    <p class="method-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+</article>
+
+<div class="method-actions no-print" style="margin-top:14px">
+    <button class="btn btn-primary" @onclick="Print">@L["Print"]</button>
+</div>
+
+@code {
+    protected override void OnInitialized() => L.OnChange += Render;
+    private void Render() => InvokeAsync(StateHasChanged);
+    private async Task Print() { try { await JS.InvokeVoidAsync("nmwPrint"); } catch { } }
+    public void Dispose() => L.OnChange -= Render;
+}

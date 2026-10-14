@@ -1,0 +1,1029 @@
+@page "/"
+@using System.Text.Json
+@using System.Globalization
+@using System.Diagnostics
+@using System.Threading
+@using NeuralMetricWeb_v1.Components
+@using NeuralMetricWeb_v1.Models
+@using NeuralMetricWeb_v1.Services
+@implements IDisposable
+@inject AnalysisClient Analysis
+@inject IJSRuntime JS
+@inject Localization L
+
+<h1 class="page-title">@L["Analyze an EEG session"]</h1>
+<p class="lede">@L["Everything runs in your browser - the recordings are never uploaded."]</p>
+
+<section class="card no-print">
+    @if (_raw is null)
+    {
+        @if (_mode == Mode.Choose)
+        {
+            <p class="choose-q">@L["What would you like to review?"]</p>
+            <div class="choice-grid">
+                <button class="choice" @onclick="@(() => SetMode(Mode.Full))">
+                    <span class="choice-title">@L["Full session"]</span>
+                    <span class="choice-desc">@L["A folder of EDF files from one case. Detect the anaesthetised window automatically, or set it yourself."]</span>
+                </button>
+                <button class="choice" @onclick="@(() => SetMode(Mode.Single))">
+                    <span class="choice-title">@L["Single file"]</span>
+                    <span class="choice-desc">@L["One EDF file, reviewed over its whole length. No window detection."]</span>
+                </button>
+            </div>
+        }
+        else if (_mode == Mode.Full)
+        {
+            <button class="link-back" @onclick="@(() => SetMode(Mode.Choose))">&larr; @L["Back"]</button>
+            <p class="step-num">@L["Step 1"] &middot; @L["Select folder"]</p>
+            <div class="file-field">
+                <span class="file-label">@L["Session folder"]</span>
+                <label class="file-picker">
+                    <input type="file" id="edfFolder" webkitdirectory @onchange="OnFolderChange" class="sr-only" />
+                    <span class="file-btn">@L["Choose folder"]</span>
+                    <span class="file-name">@(_fileCount > 0 ? $"{_fileCount} {L["EDF files"]}" : L["No folder selected"])</span>
+                </label>
+            </div>
+            @if (_fileCount > 0)
+            {
+                <p class="file-count">~@_recMin @L["min"]@(EstLine)</p>
+                @if (_channelOpts.Count > 0)
+                {
+                    <p class="step-num">@L["Channel"]</p>
+                    <select class="chan-select" @bind="_selectedChannel">
+                        @foreach (var c in _channelOpts)
+                        {
+                            <option value="@c.Value">@c.Label</option>
+                        }
+                    </select>
+                }
+                <p class="step-num">@L["Step 2"] &middot; @L["Window"]</p>
+                <div class="seg">
+                    <button class="btn @(_fullKind == Full.Auto ? "seg-on" : "")" @onclick="@(() => _fullKind = Full.Auto)">@L["Automatic window"]</button>
+                    <button class="btn @(_fullKind == Full.Manual ? "seg-on" : "")" @onclick="@(() => _fullKind = Full.Manual)">@L["Manual window"]</button>
+                </div>
+                @if (_fullKind == Full.Manual)
+                {
+                    <p class="manual-head">@L["New window"]</p>
+                    <div class="manual-inputs">
+                        <label>@L["Start"]<input type="time" @bind="_startClock" /></label>
+                        <label>@L["End"]<input type="time" @bind="_endClock" /></label>
+                    </div>
+                }
+                <p class="step-num">@L["Step 3"] &middot; @L["Analyze"]</p>
+                <div class="actions">
+                    <button class="btn btn-primary" @onclick="RunFullAsync" disabled="@_busy">@L["Analyze"]</button>
+                </div>
+            }
+        }
+        else
+        {
+            <button class="link-back" @onclick="@(() => SetMode(Mode.Choose))">&larr; @L["Back"]</button>
+            <p class="step-num">@L["Step 1"] &middot; @L["Select file"]</p>
+            <div class="file-field">
+                <span class="file-label">@L["EDF file"]</span>
+                <label class="file-picker">
+                    <input type="file" id="edfFile" accept=".edf" @onchange="OnFileChange" class="sr-only" />
+                    <span class="file-btn">@L["Choose file"]</span>
+                    <span class="file-name">@(_fileCount > 0 ? L["1 EDF file"] : L["No file selected"])</span>
+                </label>
+            </div>
+            @if (_fileCount > 0)
+            {
+                <p class="file-count">~@_recMin @L["min"]@(EstLine)</p>
+                @if (_channelOpts.Count > 0)
+                {
+                    <p class="step-num">@L["Channel"]</p>
+                    <select class="chan-select" @bind="_selectedChannel">
+                        @foreach (var c in _channelOpts)
+                        {
+                            <option value="@c.Value">@c.Label</option>
+                        }
+                    </select>
+                }
+                <p class="step-num">@L["Step 2"] &middot; @L["Review file"]</p>
+                <div class="actions">
+                    <button class="btn btn-primary" @onclick="RunSingleAsync" disabled="@_busy">@L["Review file"]</button>
+                </div>
+            }
+        }
+    }
+    else
+    {
+        <div class="run-again">
+            <span>@L["Analysis complete."]</span>
+            <button class="btn" @onclick="Reset">@L["New analysis"]</button>
+        </div>
+    }
+
+    @if (_stage > 0)
+    {
+        <div class="stepper" aria-live="polite">
+            <ol class="steps">
+                <li class="step @StepClass(1)"><span class="step-dot"></span><span class="step-label">@L["Reading files"]</span></li>
+                <li class="step @StepClass(2)"><span class="step-dot"></span><span class="step-label">@L["Processing"]</span></li>
+                <li class="step @StepClass(3)"><span class="step-dot"></span><span class="step-label">@L["Done"]</span></li>
+            </ol>
+            <span class="step-time mono">@ElapsedText@ProcEst</span>
+        </div>
+    }
+</section>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>@_error</strong>
+        <p class="alert-hint">@L[ErrorHint(_error)]</p>
+    </div>
+}
+
+@if (_raw is { } raw)
+{
+    <div class="print-only report-head">
+        <div class="rh-title">NeuralMetric Web &mdash; @L["Session report"]</div>
+        <div class="rh-meta">@DateText(raw, "session_start") &middot; @TimeText(raw, "session_start")&ndash;@TimeText(raw, "session_end") &middot; @L["Verdict"]: @L[Text(raw, "verdict")]</div>
+    </div>
+    <section class="card">
+        <div class="summary-row">
+            <div class="stat"><span class="stat-k">@L["Date recorded"]</span><span class="stat-v">@DateText(raw, "session_start")</span></div>
+            <div class="stat"><span class="stat-k">@L["Start"]</span><span class="stat-v mono">@TimeText(raw, "session_start")</span></div>
+            <div class="stat"><span class="stat-k">@L["End"]</span><span class="stat-v mono">@TimeText(raw, "session_end")</span></div>
+            <div class="stat"><span class="stat-k">@L["Duration"]</span><span class="stat-v mono">@SpanText(raw, "session_start", "session_end")</span></div>
+            <div class="stat"><span class="stat-k">@L["Files used"]</span><span class="stat-v">@Text(raw, "files_used") / @Text(raw, "files_total")</span></div>
+            <div class="stat"><span class="stat-k">@L["Recorded"]</span><span class="stat-v">@Text(raw, "recorded_min") @L["min"]</span></div>
+            <div class="stat"><span class="stat-k">@L["Analysable"]</span><span class="stat-v">@Text(raw, "analysable_min") @L["min"]</span></div>
+            @if (raw.TryGetProperty("maintenance", out var m) && m.ValueKind == JsonValueKind.Object)
+            {
+                <div class="stat"><span class="stat-k">@L["Analyzed window"]</span><span class="stat-v">@WindowText(m)</span></div>
+                <div class="stat"><span class="stat-k">@L["Mode"]</span><span class="stat-v" style="text-transform:capitalize">@L[Text(m, "source")]</span></div>
+            }
+            <div class="stat"><span class="stat-k">@L["Verdict"]</span><span class="stat-v"><span class="badge badge-@VerdictClass(raw)">@L[Text(raw, "verdict")]</span></span></div>
+        </div>
+
+        @if (Strings(raw, "corrupt_files").Any())
+        {
+            <div class="alert alert-danger" role="alert">
+                <strong>@L["Bad signal (corrupted file)"]</strong>
+                <ul>
+                    @foreach (var s in Strings(raw, "corrupt_files"))
+                    {
+                        <li>@LocalizeMsg(s)</li>
+                    }
+                </ul>
+            </div>
+        }
+        @if (raw.TryGetProperty("maintenance", out var mf))
+        {
+            @foreach (var s in Strings(mf, "flags"))
+            {
+                <p class="alert alert-warn" role="alert">@L["Flag:"] @LocalizeMsg(s)</p>
+            }
+        }
+    </section>
+
+    @if (HasQualityConcern(raw))
+    {
+        <section class="card quality-card">
+            <h2 class="chart-title">@L["Recording quality"]</h2>
+            @foreach (var note in QualityNotes(raw))
+            {
+                <p class="alert alert-warn" role="alert">@note</p>
+            }
+        </section>
+    }
+
+    @if (HasAnnotations(raw))
+    {
+        <section class="card annot-card">
+            <h2 class="chart-title">@L["Device events (EDF+ annotations)"]</h2>
+            <p class="chart-sub">@L["Markers recorded by the monitor in the EDF+ file."]</p>
+            <table class="annot-table">
+                <tbody>
+                    @foreach (var a in Annotations(raw))
+                    {
+                        <tr><td class="mono">@a.Clock</td><td>@a.Text@(a.Dur is null ? "" : $" ({a.Dur})")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+
+    @if (_analysis is { } analysis)
+    {
+        <div class="side-dock no-print">
+            <button class="dock-btn" title="@L["Download CSV"]" @onclick="DownloadCsvAsync">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+                <span class="dock-lbl">CSV</span>
+            </button>
+            <button class="dock-btn" title="@L["Report (PDF)"]" @onclick="PrintReportAsync">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7" rx="1"/></svg>
+                <span class="dock-lbl">PDF</span>
+            </button>
+        </div>
+        <BiomarkerPanel Result="analysis" />
+
+        <div class="chart-stack">
+        @if (HasCompositeTrend(raw))
+        {
+            <section class="card" style="order:@_order.IndexOf("composite")">
+                <div class="chart-head">
+                    <div>
+                        <h2 class="chart-title">@L["Composite index"]</h2>
+                        <p class="chart-sub">@L["pEEG composite index (adapted from the openibis method, Connor 2022) across the session. Analyzed window shaded."] @(HasDevice(raw) ? L["Grey line: device BIS."] : "")</p>
+                    </div>
+                    <div class="card-move">
+                        <button class="icon-btn" title="@L["Move up"]" disabled="@IsFirst("composite")" @onclick='@(() => MoveUp("composite"))'>&#8593;</button>
+                        <button class="icon-btn" title="@L["Move down"]" disabled="@IsLast("composite")" @onclick='@(() => MoveDown("composite"))'>&#8595;</button>
+                    </div>
+                </div>
+                <div id="chart-composite" class="chart"></div>
+                @if (HasDevice(raw))
+                {
+                    <div class="summary-row" style="margin-top:8px">
+                        <div class="stat"><span class="stat-k">@L["Device BIS (median)"]</span><span class="stat-v">@DeviceMedian(raw, "bis")</span></div>
+                        <div class="stat"><span class="stat-k">@L["Device SEF (median)"]</span><span class="stat-v">@DeviceMedian(raw, "sef") Hz</span></div>
+                        <div class="stat"><span class="stat-k">@L["Device SR (median)"]</span><span class="stat-v">@DeviceMedian(raw, "sr") %</span></div>
+                    </div>
+                }
+                <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+            </section>
+        }
+
+        @if (HasDsa(raw))
+        {
+            <section class="card" style="order:@_order.IndexOf("dsa")">
+                <div class="chart-head">
+                    <div>
+                        <h2 class="chart-title">@L["Spectrogram (DSA)"]</h2>
+                        <p class="chart-sub">@L["Power spectral density over time, 0.5-30 Hz, in dB. Median of QC-valid windows per 30 s. The white line is SEF95."]</p>
+                    </div>
+                    <div class="card-move">
+                        <button class="icon-btn" title="@L["Move up"]" disabled="@IsFirst("dsa")" @onclick='@(() => MoveUp("dsa"))'>&#8593;</button>
+                        <button class="icon-btn" title="@L["Move down"]" disabled="@IsLast("dsa")" @onclick='@(() => MoveDown("dsa"))'>&#8595;</button>
+                    </div>
+                </div>
+                <div id="chart-dsa" class="chart"></div>
+                <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+            </section>
+        }
+
+        @if (HasBandTrend(raw))
+        {
+            <section class="card" style="order:@_order.IndexOf("band")">
+                <div class="chart-head">
+                    <div>
+                        <h2 class="chart-title">@L["Band power over time"]</h2>
+                        <p class="chart-sub">@L["Delta, Theta, Alpha and Beta across the session, on the same timeline as the composite and DSA."]</p>
+                    </div>
+                    <div class="card-tools">
+                        <div class="seg seg-sm">
+                            <button class="btn @(_psdMode == "db" ? "seg-on" : "")" @onclick='@(() => SetPsdModeAsync("db"))'>@L["Absolute (dB)"]</button>
+                            <button class="btn @(_psdMode == "rel" ? "seg-on" : "")" @onclick='@(() => SetPsdModeAsync("rel"))'>@L["Relative (%)"]</button>
+                        </div>
+                        <div class="card-move">
+                            <button class="icon-btn" title="@L["Move up"]" disabled="@IsFirst("band")" @onclick='@(() => MoveUp("band"))'>&#8593;</button>
+                            <button class="icon-btn" title="@L["Move down"]" disabled="@IsLast("band")" @onclick='@(() => MoveDown("band"))'>&#8595;</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="band-legend">
+                    <span class="band-key"><i style="background:var(--delta)"></i>Delta</span>
+                    <span class="band-key"><i style="background:var(--theta)"></i>Theta</span>
+                    <span class="band-key"><i style="background:var(--alpha)"></i>Alpha</span>
+                    <span class="band-key"><i style="background:var(--beta)"></i>Beta</span>
+                </div>
+                <div id="chart-psd" class="chart"></div>
+                <p class="chart-method">@L["Absolute shows each band's power in dB (10 log10 of band power in µV², scale-dependent). Relative shows each band as % of total 0.5-30 Hz power (scale-independent). The toggle changes only the y-axis; the time axis is shared with the composite and DSA."]</p>
+                <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+            </section>
+        }
+
+        @if (HasBsr(raw) && raw.TryGetProperty("bsr", out var bsr))
+        {
+            <section class="card" style="order:@_order.IndexOf("bsr")">
+                <div class="chart-head">
+                    <div>
+                        <h2 class="chart-title">@L["Burst suppression"]</h2>
+                        <p class="chart-sub">@L["Percentage of analysable EEG in suppression, across the session."]</p>
+                    </div>
+                    <div class="card-move">
+                        <button class="icon-btn" title="@L["Move up"]" disabled="@IsFirst("bsr")" @onclick='@(() => MoveUp("bsr"))'>&#8593;</button>
+                        <button class="icon-btn" title="@L["Move down"]" disabled="@IsLast("bsr")" @onclick='@(() => MoveDown("bsr"))'>&#8595;</button>
+                    </div>
+                </div>
+                <div class="summary-row" style="margin-bottom:14px">
+                    <div class="stat"><span class="stat-k">@L["BSR (analysed window)"]</span><span class="stat-v">@Text(bsr, "bsr_pct") %</span></div>
+                    <div class="stat"><span class="stat-k">@L["Time in suppression"]</span><span class="stat-v">@Text(bsr, "suppression_min") @L["min"]</span></div>
+                    <div class="stat"><span class="stat-k">@L["Longest episode"]</span><span class="stat-v">@Text(bsr, "episode_longest_s") s</span></div>
+                    <div class="stat"><span class="stat-k">@L["Indeterminate"]</span><span class="stat-v">@Text(bsr, "indeterminate_pct") %</span></div>
+                </div>
+                <div id="chart-bsr" class="chart"></div>
+                <p class="chart-method">@L["A sample counts as suppression when its local line length and amplitude stay low for at least 1 s; saturated or stuck samples are indeterminate and excluded. BSR is the % of determinate EEG in suppression; the trend is per minute on the shared timeline."]</p>
+                <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+            </section>
+        }
+        </div>
+
+        @if (_pickMin is double pm)
+        {
+            <section class="card no-print">
+                <div class="chart-head">
+                    <div>
+                        <h2 class="chart-title">@L["Raw EEG"]</h2>
+                        <p class="chart-sub">@L["Unfiltered signal around the selected time."] <span class="mono">@RawClock(raw, pm)</span></p>
+                    </div>
+                    <div class="raw-controls">
+                        <div class="seg seg-sm">
+                            <button class="btn @(_rawWin == 5 ? "seg-on" : "")" @onclick="@(() => SetRawWinAsync(5))">5 s</button>
+                            <button class="btn @(_rawWin == 10 ? "seg-on" : "")" @onclick="@(() => SetRawWinAsync(10))">10 s</button>
+                            <button class="btn @(_rawWin == 30 ? "seg-on" : "")" @onclick="@(() => SetRawWinAsync(30))">30 s</button>
+                        </div>
+                        <div class="seg seg-sm">
+                            <button class="btn @(_rawRes == 25 ? "seg-on" : "")" @onclick="@(() => SetRawResAsync(25))">25 µV</button>
+                            <button class="btn @(_rawRes == 50 ? "seg-on" : "")" @onclick="@(() => SetRawResAsync(50))">50 µV</button>
+                            <button class="btn @(_rawRes == 100 ? "seg-on" : "")" @onclick="@(() => SetRawResAsync(100))">100 µV</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="chart-raw" class="chart"></div>
+                <p class="chart-method">@L["Click any chart above to move the cursor. The dashed line marks the selected instant; the vertical scale is the selected µV above and below zero."]</p>
+            </section>
+        }
+    }
+    else
+    {
+        <div class="alert alert-danger" role="alert">
+            <strong>@L["Session not accepted for analysis."]</strong>
+            @foreach (var s in Strings(raw, "reasons"))
+            {
+                <p>• @LocalizeMsg(s)</p>
+            }
+            @if (raw.TryGetProperty("maintenance", out var mr))
+            {
+                @foreach (var s in Strings(mr, "reasons"))
+                {
+                    <p>• @LocalizeMsg(s)</p>
+                }
+            }
+        </div>
+
+        <section class="card">
+            <p class="manual-head">@L["No window was detected automatically. Set one manually to analyze a specific window."]</p>
+            <div class="manual-inputs">
+                <label>@L["Start"]<input type="time" @bind="_startClock" /></label>
+                <label>@L["End"]<input type="time" @bind="_endClock" /></label>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" @onclick="RunManualCachedAsync" disabled="@_busy">@L["Analyze window"]</button>
+            </div>
+        </section>
+    }
+
+    <div class="print-only report-foot">
+        @L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]
+        &middot; @L["Generated"] @DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+    </div>
+
+    <details class="raw">
+        <summary>@L["All returned values"]</summary>
+        <table class="raw-table">
+            <tbody>
+                @foreach (var prop in raw.EnumerateObject())
+                {
+                    <tr><td>@prop.Name</td><td>@prop.Value.ToString()</td></tr>
+                }
+            </tbody>
+        </table>
+    </details>
+}
+
+@code {
+    private enum Mode { Choose, Full, Single }
+    private enum Full { Auto, Manual }
+
+    private Mode _mode = Mode.Choose;
+    private Full _fullKind = Full.Auto;
+    private int _fileCount;
+    private List<(string Value, string Label)> _channelOpts = new();
+    private string? _selectedChannel;
+    private string _sourceType = "edf";
+    private int _recMin;
+    private int? _estSeconds;
+    private TimeOnly? _startClock;
+    private TimeOnly? _endClock;
+    private DateTime? _sessionStart;
+
+    private bool _busy;
+    private string? _error;
+    private AnalysisResult? _analysis;
+    private JsonElement? _raw;
+    private IJSObjectReference? _charts;
+    private bool _drawCharts;
+    private string _psdMode = "db";
+    private double _sharedX = 1;
+    private double? _pickMin;
+    private bool _drawRaw;
+    private int _rawRes = 50;
+    private int _rawWin = 10;
+    private DotNetObjectReference<Home>? _selfRef;
+    private List<string> _order = new() { "composite", "dsa", "band", "bsr" };
+
+    private int _stage;
+    private readonly Stopwatch _sw = new();
+    private CancellationTokenSource? _tickCts;
+
+    protected override void OnInitialized() => L.OnChange += Render;
+    private void Render()
+    {
+        if (_analysis is not null) _drawCharts = true;   // redraw chart with new-language labels
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void SetMode(Mode m)
+    {
+        _mode = m;
+        _fileCount = 0;
+        _error = null;
+    }
+
+    private void Reset()
+    {
+        _mode = Mode.Choose;
+        _fullKind = Full.Auto;
+        _fileCount = 0;
+        _raw = null;
+        _pickMin = null;
+        _analysis = null;
+        _error = null;
+        _stage = 0;
+    }
+
+    private Task OnFolderChange() => LoadInfoAsync("edfFolder");
+    private Task OnFileChange() => LoadInfoAsync("edfFile");
+
+    private async Task LoadInfoAsync(string inputId)
+    {
+        var info = await Analysis.SessionInfoAsync(inputId);
+        _fileCount = info.Count;
+        _recMin = info.Minutes;
+        _estSeconds = info.Est;
+
+        _channelOpts = new();
+        _selectedChannel = null;
+        if (_fileCount > 0)
+        {
+            try
+            {
+                var ci = await Analysis.ChannelsInfoAsync(inputId);
+                _sourceType = ci.TryGetProperty("type", out var tp) ? tp.GetString() ?? "edf" : "edf";
+                if (ci.TryGetProperty("channels", out var chs) && chs.ValueKind == JsonValueKind.Array)
+                    foreach (var c in chs.EnumerateArray())
+                    {
+                        var val = c.TryGetProperty("value", out var v) ? v.ToString() : "";
+                        var lab = c.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString()! : val;
+                        _channelOpts.Add((val, lab));
+                    }
+                int def = ci.TryGetProperty("default", out var d) && d.ValueKind == JsonValueKind.Number ? d.GetInt32() : 0;
+                if (_channelOpts.Count > 0) _selectedChannel = _channelOpts[Math.Clamp(def, 0, _channelOpts.Count - 1)].Value;
+            }
+            catch { }
+        }
+
+        if (DateTimeOffset.TryParse(info.StartIso, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var sdto))
+        {
+            _sessionStart = sdto.UtcDateTime;
+            _startClock = TimeOnly.FromDateTime(_sessionStart.Value);
+        }
+        if (DateTimeOffset.TryParse(info.EndIso, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var edto))
+        {
+            _endClock = TimeOnly.FromDateTime(edto.UtcDateTime);
+        }
+    }
+
+    private Task RunFullAsync()
+    {
+        if (_fullKind == Full.Auto) return RunAsync("edfFolder", null, null, false, _selectedChannel);
+        var a = ClockToMin(_startClock);
+        var b = ClockToMin(_endClock);
+        if (a is null || b is null) { _error = "Enter valid start and end times (HH:mm)."; return Task.CompletedTask; }
+        if (b <= a) { _error = "The surgical end must be later than the start."; return Task.CompletedTask; }
+        return RunAsync("edfFolder", a, b, false, _selectedChannel);
+    }
+
+    private double? ClockToMin(TimeOnly? clock)
+    {
+        if (clock is null || _sessionStart is null) return null;
+        var mins = (clock.Value.ToTimeSpan() - _sessionStart.Value.TimeOfDay).TotalMinutes;
+        if (mins < -720) mins += 1440;
+        return Math.Round(mins, 1);
+    }
+
+    private Task RunSingleAsync() => RunAsync("edfFile", null, null, true, _selectedChannel);
+
+    // Re-run with a manual window on the already-loaded session (rejected-session recovery).
+    private async Task RunManualCachedAsync()
+    {
+        if (_sessionStart is null && _raw is { } r0 && TryClock(r0, "session_start", out var sdt))
+            _sessionStart = sdt;
+        var a = ClockToMin(_startClock);
+        var b = ClockToMin(_endClock);
+        if (a is null || b is null) { _error = L["Enter a valid start and end time (HH:mm)."]; return; }
+        if (b <= a) { _error = L["The end must be later than the start."]; return; }
+
+        _busy = true; _error = null; _analysis = null; _raw = null; _pickMin = null; _stage = 1;
+        _sw.Restart(); StartTick();
+        var reporter = new ProgressReporter(OnStage);
+        using var dotRef = DotNetObjectReference.Create(reporter);
+        try
+        {
+            var json = await Analysis.ReanalyzeWindowAsync(a.Value, b.Value, dotRef);
+            _raw = json;
+            var verdict = json.GetProperty("verdict").GetString();
+            if (verdict is "complete" or "manual" or "review")
+            {
+                _analysis = json.Deserialize<AnalysisResult>();
+                _drawCharts = true;
+            }
+        }
+        catch (Exception ex) { _error = ex.Message; _stage = 0; }
+        finally { _busy = false; _sw.Stop(); StopTick(); StateHasChanged(); }
+    }
+
+    private async Task RunAsync(string inputId, double? startMin, double? endMin, bool review, string? channel = null)
+    {
+        _busy = true;
+        _error = null;
+        _analysis = null;
+        _raw = null;
+        _pickMin = null;
+        _stage = 1;
+        _sw.Restart();
+        StartTick();
+
+        var reporter = new ProgressReporter(OnStage);
+        using var dotRef = DotNetObjectReference.Create(reporter);
+        try
+        {
+            var json = review
+                ? await Analysis.AnalyzeReviewAsync(inputId, dotRef, channel)
+                : await Analysis.AnalyzeAsync(inputId, startMin, endMin, dotRef, channel);
+            _raw = json;
+            var verdict = json.GetProperty("verdict").GetString();
+            if (verdict is "complete" or "manual" or "review")
+            {
+                _analysis = json.Deserialize<AnalysisResult>();
+                _drawCharts = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _stage = 0;
+        }
+        finally
+        {
+            _busy = false;
+            _sw.Stop();
+            StopTick();
+            if (_error is null && _recMin > 0) { _ = Analysis.RecordRunAsync(_recMin, _sw.Elapsed.TotalSeconds); }
+            StateHasChanged();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ = Analysis.WarmupAsync();
+            try
+            {
+                _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+                var o = await _charts.InvokeAsync<string>("loadOrder");
+                if (!string.IsNullOrWhiteSpace(o))
+                {
+                    var parts = o.Split(',').Where(x => _order.Contains(x)).Distinct().ToList();
+                    if (parts.Count == _order.Count) { _order = parts; StateHasChanged(); }
+                }
+            }
+            catch { }
+        }
+        if (_analysis is null || _raw is not { } raw) return;
+        _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+        if (_selfRef is null) { _selfRef = DotNetObjectReference.Create(this); try { await _charts.InvokeVoidAsync("setPick", _selfRef); } catch { } }
+        if (_drawRaw) { _drawRaw = false; await DrawRawAsync(); }
+        if (!_drawCharts) return;
+        _drawCharts = false;
+
+        double sharedX = 0;
+        if (raw.TryGetProperty("maintenance", out var mmx) && mmx.TryGetProperty("composite_trend", out var ctx)
+            && ctx.TryGetProperty("time_min", out var ctt) && ctt.ValueKind == JsonValueKind.Array && ctt.GetArrayLength() > 0)
+            sharedX = Math.Max(sharedX, ctt[ctt.GetArrayLength() - 1].GetDouble());
+        if (raw.TryGetProperty("band_trend", out var btx) && btx.TryGetProperty("time_min", out var btt)
+            && btt.ValueKind == JsonValueKind.Array && btt.GetArrayLength() > 0)
+        {
+            double binS = btx.TryGetProperty("bin_s", out var bs) ? bs.GetDouble() : 30;
+            sharedX = Math.Max(sharedX, btt[btt.GetArrayLength() - 1].GetDouble() + binS / 120);
+        }
+        _sharedX = sharedX > 0 ? sharedX : 1;
+        if (raw.TryGetProperty("bsr_trend", out var brx) && brx.TryGetProperty("time_min", out var brt)
+            && brt.ValueKind == JsonValueKind.Array && brt.GetArrayLength() > 0)
+            _sharedX = Math.Max(_sharedX, brt[brt.GetArrayLength() - 1].GetDouble() + 0.5);
+
+        if (raw.TryGetProperty("maintenance", out var m) && m.TryGetProperty("composite_trend", out var tr)
+            && tr.ValueKind == JsonValueKind.Object)
+        {
+            var time = tr.GetProperty("time_min").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+            var comp = tr.GetProperty("composite").EnumerateArray()
+                .Select(e => e.ValueKind == JsonValueKind.Null ? (double?)null : e.GetDouble()).ToArray();
+            double[]? window = m.TryGetProperty("window", out var w) && w.ValueKind == JsonValueKind.Array && w.GetArrayLength() == 2
+                ? new[] { w[0].GetDouble(), w[1].GetDouble() } : null;
+            try
+            {
+                var markers = AnnotationMarkers(raw);
+                double?[]? deviceBis = null;
+                if (raw.TryGetProperty("device", out var dev) && dev.ValueKind == JsonValueKind.Object
+                    && dev.TryGetProperty("bis", out var dbis) && dbis.ValueKind == JsonValueKind.Array)
+                {
+                    var dv = dbis.EnumerateArray()
+                        .Select(e => e.ValueKind == JsonValueKind.Number ? (double?)e.GetDouble() : null).ToArray();
+                    deviceBis = time.Select(tmin => { int k = (int)Math.Round(tmin * 60); return (k >= 0 && k < dv.Length) ? dv[k] : null; }).ToArray();
+                }
+                await _charts.InvokeVoidAsync("renderComposite", "chart-composite",
+                    new { time, composite = comp, window, xMax = _sharedX, rightPad = 70, markers,
+                          deviceBis, deviceLabel = L["BIS (device)"], selfLabel = L["Composite"],
+                          labels = new { window = L["Analyzed window"], x = L["time (min)"], y = L["composite (0-100)"] } });
+            }
+            catch { }
+        }
+
+        if (raw.TryGetProperty("dsa", out var dsaEl) && dsaEl.ValueKind == JsonValueKind.Object)
+        {
+            try
+            {
+                await _charts.InvokeVoidAsync("renderDSA", "chart-dsa", dsaEl,
+                    new { x = L["time (min)"], y = "Hz", rejected = L["rejected"], noData = L["no data"], xMax = _sharedX, sefLabel = L["SEF95"] });
+            }
+            catch { }
+        }
+
+        await DrawBandTrendAsync();
+
+        if (raw.TryGetProperty("bsr_trend", out var btr) && btr.ValueKind == JsonValueKind.Object)
+        {
+            double[]? bwin = null;
+            double? btrans = null;
+            var bverdict = raw.TryGetProperty("verdict", out var bv) ? bv.GetString() : null;
+            if ((bverdict is "complete" or "manual") && raw.TryGetProperty("maintenance", out var mb))
+            {
+                if (mb.TryGetProperty("window", out var ww) && ww.ValueKind == JsonValueKind.Array && ww.GetArrayLength() == 2)
+                    bwin = new[] { ww[0].GetDouble(), ww[1].GetDouble() };
+                if (mb.TryGetProperty("detected", out var dd) && dd.ValueKind == JsonValueKind.Object
+                    && dd.TryGetProperty("transition_min", out var tmn) && tmn.ValueKind == JsonValueKind.Number)
+                    btrans = tmn.GetDouble();
+            }
+            try
+            {
+                await _charts.InvokeVoidAsync("renderBsr", "chart-bsr", btr,
+                    new { xMax = _sharedX, rightPad = 70, window = bwin, transition = btrans,
+                          transitionLabel = L["Induction"],
+                          labels = new { x = L["time (min)"], y = L["BSR (%)"] } });
+            }
+            catch { }
+        }
+    }
+
+    private async Task SetPsdModeAsync(string mode)
+    {
+        _psdMode = mode;
+        await DrawBandTrendAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnChartPick(double tMin)
+    {
+        _pickMin = tMin;
+        _drawRaw = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetRawResAsync(int res) { _rawRes = res; await DrawRawAsync(); }
+    private async Task SetRawWinAsync(int win) { _rawWin = win; await DrawRawAsync(); }
+
+    private async Task DrawRawAsync()
+    {
+        if (_pickMin is not double tm) return;
+        _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+        try
+        {
+            await _charts.InvokeVoidAsync("renderRaw", "chart-raw", tm, _rawWin, _rawRes,
+                new { labels = new { x = L["s (around cursor)"], y = "µV", cursor = L["cursor"],
+                      none = L["No raw EEG at this time (gap or outside the analysed signal)."] } });
+        }
+        catch { }
+    }
+
+    private string RawClock(JsonElement raw, double tMin) =>
+        TryClock(raw, "session_start", out var dt)
+            ? dt.AddMinutes(tMin).ToString("HH:mm:ss", CultureInfo.InvariantCulture) + $" · {tMin.ToString("0.0", CultureInfo.InvariantCulture)} {L["min"]}"
+            : $"{tMin.ToString("0.0", CultureInfo.InvariantCulture)} {L["min"]}";
+
+    private record Annot(string Clock, string Text, string? Dur, double TimeMin);
+
+    private static bool HasAnnotations(JsonElement raw) =>
+        raw.TryGetProperty("annotations", out var a) && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() > 0;
+
+    private IEnumerable<Annot> Annotations(JsonElement raw)
+    {
+        var list = new List<Annot>();
+        if (!raw.TryGetProperty("annotations", out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+        var inv = CultureInfo.InvariantCulture;
+        TryClock(raw, "session_start", out var baseDt);
+        foreach (var a in arr.EnumerateArray())
+        {
+            double tmin = a.TryGetProperty("time_min", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetDouble() : 0;
+            string text = a.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String ? tx.GetString()! : "";
+            string? dur = a.TryGetProperty("duration_s", out var dv) && dv.ValueKind == JsonValueKind.Number
+                ? dv.GetDouble().ToString("0.#", inv) + " s" : null;
+            string clock = baseDt != default
+                ? baseDt.AddMinutes(tmin).ToString("HH:mm:ss", inv)
+                : tmin.ToString("0.0", inv) + " min";
+            list.Add(new Annot(clock, text, dur, tmin));
+        }
+        return list;
+    }
+
+    private object[] AnnotationMarkers(JsonElement raw) =>
+        Annotations(raw).Select(a => (object)new { x = a.TimeMin, color = "--ink-3" }).ToArray();
+
+    private string LocalizeMsg(string s)
+    {
+        if (L.Lang != "es" || string.IsNullOrEmpty(s)) return s;
+        System.Text.RegularExpressions.Match m;
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^induction not recorded: the recording starts with the composite already below (.+)$");
+        if (m.Success) return $"inducción no registrada: la grabación empieza con el compuesto ya por debajo de {m.Groups[1].Value}";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^emergence not detected: the recording ends before a sustained rise above (.+)$");
+        if (m.Success) return $"emergencia no detectada: la grabación termina antes de un aumento sostenido por encima de {m.Groups[1].Value}";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^no sustained period \((.+) min\) below (.+)$");
+        if (m.Success) return $"sin periodo sostenido ({m.Groups[1].Value} min) por debajo de {m.Groups[2].Value}";
+        if (s == "refinement left no usable window") return "el refinamiento no dejó una ventana utilizable";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^maintenance window (.+) min is shorter than (.+) min$");
+        if (m.Success) return $"la ventana de mantenimiento {m.Groups[1].Value} min es menor que {m.Groups[2].Value} min";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^signal gap of (.+) s inside the window \(limit (.+) s\)$");
+        if (m.Success) return $"hueco de señal de {m.Groups[1].Value} s dentro de la ventana (límite {m.Groups[2].Value} s)";
+        if (s == "no maintenance detected") return "no se detectó mantenimiento";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^(.*): (.+) % of samples at the device limits \(bad signal\)$");
+        if (m.Success) return $"{m.Groups[1].Value}: {m.Groups[2].Value} % de las muestras en los límites del equipo (mala señal)";
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^sampling rate (.+) Hz differs from the session's (.+) Hz$");
+        if (m.Success) return $"la frecuencia de muestreo {m.Groups[1].Value} Hz difiere de la de la sesión {m.Groups[2].Value} Hz";
+        return s;
+    }
+
+    private static bool HasDevice(JsonElement raw) =>
+        raw.TryGetProperty("device", out var d) && d.ValueKind == JsonValueKind.Object
+        && d.TryGetProperty("bis", out var b) && b.ValueKind == JsonValueKind.Array && b.GetArrayLength() > 0;
+
+    private string DeviceMedian(JsonElement raw, string key)
+    {
+        if (!raw.TryGetProperty("device", out var d) || !d.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return "\u2014";
+        var vals = arr.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Number).Select(e => e.GetDouble()).OrderBy(v => v).ToList();
+        if (vals.Count == 0) return "\u2014";
+        double med = vals.Count % 2 == 1 ? vals[vals.Count / 2] : (vals[vals.Count / 2 - 1] + vals[vals.Count / 2]) / 2;
+        return med.ToString("0.#", CultureInfo.InvariantCulture);
+    }
+
+    private bool HasQualityConcern(JsonElement raw) => QualityNotes(raw).Any();
+
+    private IEnumerable<string> QualityNotes(JsonElement raw)
+    {
+        var notes = new List<string>();
+        if (!raw.TryGetProperty("quality", out var q) || q.ValueKind != JsonValueKind.Object) return notes;
+        var inv = CultureInfo.InvariantCulture;
+        if (q.TryGetProperty("resolution_changed", out var rc) && rc.ValueKind == JsonValueKind.True)
+        {
+            var vals = q.TryGetProperty("resolution_values_uv", out var rv) && rv.ValueKind == JsonValueKind.Array
+                ? string.Join(" \u2192 ", rv.EnumerateArray().Select(e => e.GetDouble().ToString("0.###", inv)))
+                : "";
+            notes.Add(string.Format(L["Recording resolution changed between files ({0} µV/step); absolute band power (µV²) may not be comparable across the session."], vals));
+        }
+        if (q.TryGetProperty("fs_changed", out var fc) && fc.ValueKind == JsonValueKind.True)
+            notes.Add(L["The sampling rate changes between files in this recording."]);
+        if (q.TryGetProperty("files_excluded", out var fe) && fe.ValueKind == JsonValueKind.Number && fe.GetInt32() > 0)
+            notes.Add(string.Format(L["{0} file(s) were excluded (different sampling rate or unreadable)."], fe.GetInt32()));
+        if (q.TryGetProperty("max_clipped_pct", out var mc) && mc.ValueKind == JsonValueKind.Number && mc.GetDouble() > 2.0)
+            notes.Add(string.Format(L["Up to {0}% of samples reached the amplifier limits (possible electrode lead-off or clipping)."], mc.GetDouble().ToString("0.#", inv)));
+        if (q.TryGetProperty("blocks_dropped", out var bd) && bd.ValueKind == JsonValueKind.Number && bd.GetInt32() > 0)
+            notes.Add(string.Format(L["{0} segment(s) were dropped as sensor-off (electrode lead-off)."], bd.GetInt32()));
+        return notes;
+    }
+
+    private static string ErrorHint(string? e)
+    {
+        var t = (e ?? "").ToLowerInvariant();
+        if (t.Contains("edf")) return "Make sure the folder contains .edf files exported from the monitor. Other formats are not supported.";
+        if (t.Contains("sampling") || t.Contains("rate")) return "The files have different sampling rates. Use files from one continuous recording.";
+        if (t.Contains("qc") || t.Contains("nothing to analyze") || t.Contains("valid window")) return "The signal did not pass quality control (too flat, saturated, or noisy). Check the channel and the recording quality.";
+        if (t.Contains("composite") || t.Contains("long enough")) return "The recording is too short for a full-session composite. Use a longer recording or Single-file review.";
+        if (t.Contains("window")) return "The manual window falls outside the recorded data. Adjust the start and end times.";
+        return "Check that the files are valid EDF exports from the monitor and try again.";
+    }
+
+    private async Task PrintReportAsync()
+    {
+        try { await JS.InvokeVoidAsync("nmwPrint"); } catch { }
+    }
+
+    private async Task DownloadCsvAsync()
+    {
+        if (_raw is not { } raw) return;
+        var csv = BuildCsv(raw);
+        var date = TryClock(raw, "session_start", out var dt)
+            ? dt.ToString("yyyyMMdd", CultureInfo.InvariantCulture)
+            : DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        try { await JS.InvokeVoidAsync("nmwDownload", $"NeuralMetric_{date}_data.csv", csv, "text/csv"); } catch { }
+    }
+
+    private static string BuildCsv(JsonElement raw)
+    {
+        // Wide layout: one header row + one data row (one session per row) for
+        // direct append in Excel / import in SPSS. Only Date, times, duration,
+        // biomarkers and BSR.
+        var inv = CultureInfo.InvariantCulture;
+        string Num(JsonElement e, string k, string fmt) =>
+            e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble().ToString(fmt, inv) : "";
+
+        string date = TryClock(raw, "session_start", out var ds) ? ds.ToString("yyyy-MM-dd", inv) : "";
+        string tStart = TryClock(raw, "session_start", out var a2) ? a2.ToString("HH:mm:ss", inv) : "";
+        string tEnd = TryClock(raw, "session_end", out var b2) ? b2.ToString("HH:mm:ss", inv) : "";
+        string dur = (ds != default && b2 != default && b2 > ds) ? (b2 - ds).TotalMinutes.ToString("0.0", inv) : "";
+
+        string bsrPct = "", suppMin = "", longest = "", indet = "";
+        if (raw.TryGetProperty("bsr", out var bsr) && bsr.ValueKind == JsonValueKind.Object)
+        {
+            bsrPct = Num(bsr, "bsr_pct", "0.###");
+            suppMin = Num(bsr, "suppression_min", "0.##");
+            longest = Num(bsr, "episode_longest_s", "0.##");
+            indet = Num(bsr, "indeterminate_pct", "0.###");
+        }
+
+        var cols = new[] { "Date", "TimeStart", "TimeEnd", "Duration_min",
+            "Delta_uV2", "Delta_pct", "Theta_uV2", "Theta_pct", "Alpha_uV2", "Alpha_pct",
+            "Beta_uV2", "Beta_pct", "Total_uV2", "SEF95_Hz",
+            "BSR_pct", "Suppression_min", "LongestEpisode_s", "Indeterminate_pct" };
+        var vals = new[] { date, tStart, tEnd, dur,
+            Num(raw, "delta_uv2", "0.####"), Num(raw, "delta_pct", "0.##"),
+            Num(raw, "theta_uv2", "0.####"), Num(raw, "theta_pct", "0.##"),
+            Num(raw, "alpha_uv2", "0.####"), Num(raw, "alpha_pct", "0.##"),
+            Num(raw, "beta_uv2", "0.####"), Num(raw, "beta_pct", "0.##"),
+            Num(raw, "total_uv2", "0.####"), Num(raw, "sef95_hz", "0.##"),
+            bsrPct, suppMin, longest, indet };
+
+        static string E(string x) => (x.Contains(',') || x.Contains('"') || x.Contains('\n'))
+            ? "\"" + x.Replace("\"", "\"\"") + "\"" : x;
+        var sb = new System.Text.StringBuilder();
+        sb.Append(string.Join(",", System.Linq.Enumerable.Select(cols, E))).Append("\r\n");
+        sb.Append(string.Join(",", System.Linq.Enumerable.Select(vals, E))).Append("\r\n");
+        return sb.ToString();
+    }
+
+    private bool IsFirst(string k) => _order.IndexOf(k) <= 0;
+    private bool IsLast(string k) => _order.IndexOf(k) == _order.Count - 1;
+    private void MoveUp(string k) { int i = _order.IndexOf(k); if (i > 0) { (_order[i - 1], _order[i]) = (_order[i], _order[i - 1]); SaveOrder(); } }
+    private void MoveDown(string k) { int i = _order.IndexOf(k); if (i >= 0 && i < _order.Count - 1) { (_order[i + 1], _order[i]) = (_order[i], _order[i + 1]); SaveOrder(); } }
+    private void SaveOrder() { _ = _charts?.InvokeVoidAsync("saveOrder", string.Join(",", _order)); }
+
+    private async Task DrawBandTrendAsync()
+    {
+        if (_raw is not { } raw || !raw.TryGetProperty("band_trend", out var bt) || bt.ValueKind != JsonValueKind.Object) return;
+        _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+        try
+        {
+            await _charts.InvokeVoidAsync("renderBandTrend", "chart-psd", bt,
+                new { mode = _psdMode, xMax = _sharedX, rightPad = 70,
+                      labels = new { x = L["time (min)"], yDb = L["dB (absolute band power)"], yRel = L["% of total"] } });
+        }
+        catch { }
+    }
+
+    private void OnStage(string stage)
+    {
+        _stage = stage switch { "reading" => 1, "processing" => 2, "done" => 3, _ => _stage };
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void StartTick()
+    {
+        StopTick();
+        _tickCts = new CancellationTokenSource();
+        _ = RunTickAsync(_tickCts.Token);
+    }
+
+    private async Task RunTickAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(200));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void StopTick()
+    {
+        _tickCts?.Cancel();
+        _tickCts?.Dispose();
+        _tickCts = null;
+    }
+
+    public void Dispose()
+    {
+        StopTick();
+        L.OnChange -= Render;
+        _selfRef?.Dispose();
+        _ = _charts?.DisposeAsync();
+    }
+
+    private string StepClass(int i) =>
+        _stage > i ? "done" : (_stage == i ? (_stage == 3 ? "done" : "active") : "pending");
+
+    private static string FmtSec(int s) =>
+        s < 60 ? $"{s} s" : $"{s / 60}:{(s % 60).ToString("00", CultureInfo.InvariantCulture)} min";
+
+    private string EstLine => _estSeconds is int s ? $" · {L["est"]} ~{FmtSec(s)}" : "";
+    private string ProcEst => (_stage == 2 && _estSeconds is int s) ? $" / ~{FmtSec(s)}" : "";
+
+    private string ElapsedText
+    {
+        get
+        {
+            var e = _sw.Elapsed;
+            var inv = CultureInfo.InvariantCulture;
+            return e.TotalSeconds < 60
+                ? $"{e.TotalSeconds.ToString("0.0", inv)} s"
+                : $"{(int)e.TotalMinutes}:{e.Seconds.ToString("00", inv)} min";
+        }
+    }
+
+    private static string Text(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null ? v.ToString() : "—";
+
+    private static IEnumerable<string> Strings(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var arr) && arr.ValueKind == JsonValueKind.Array
+            ? arr.EnumerateArray().Select(x => x.GetString() ?? "")
+            : Enumerable.Empty<string>();
+
+    private static bool HasCompositeTrend(JsonElement raw) =>
+        raw.TryGetProperty("maintenance", out var m)
+            && m.TryGetProperty("composite_trend", out var t)
+            && t.ValueKind == JsonValueKind.Object;
+
+    private static bool HasDsa(JsonElement raw) =>
+        raw.TryGetProperty("dsa", out var d) && d.ValueKind == JsonValueKind.Object;
+
+    private static bool HasBandTrend(JsonElement raw) =>
+        raw.TryGetProperty("band_trend", out var p) && p.ValueKind == JsonValueKind.Object;
+
+    private static bool HasBsr(JsonElement raw) =>
+        raw.TryGetProperty("bsr_trend", out var bt) && bt.ValueKind == JsonValueKind.Object
+        && bt.TryGetProperty("time_min", out var tm) && tm.ValueKind == JsonValueKind.Array && tm.GetArrayLength() > 0;
+
+    private static string VerdictClass(JsonElement e) =>
+        Text(e, "verdict") is "complete" or "manual" or "review" ? "ok" : "danger";
+
+    private static string WindowText(JsonElement m) =>
+        m.TryGetProperty("window", out var w) && w.ValueKind == JsonValueKind.Array && w.GetArrayLength() == 2
+            ? $"{w[0].GetDouble().ToString("0.0", CultureInfo.InvariantCulture)} – " +
+              $"{w[1].GetDouble().ToString("0.0", CultureInfo.InvariantCulture)} min"
+            : "—";
+
+    private string DateText(JsonElement e, string name) =>
+        TryClock(e, name, out var dt) ? dt.ToString("d", L.Culture) : "—";
+
+    private static string TimeText(JsonElement e, string name) =>
+        TryClock(e, name, out var dt) ? dt.ToString("HH:mm", CultureInfo.InvariantCulture) : "—";
+
+    private string SpanText(JsonElement e, string startName, string endName)
+    {
+        if (TryClock(e, startName, out var a) && TryClock(e, endName, out var b) && b > a)
+        {
+            var mins = (b - a).TotalMinutes;
+            var inv = CultureInfo.InvariantCulture;
+            return $"{mins.ToString("0.0", inv)} {L["min"]} ({(mins / 60).ToString("0.0", inv)} {L["hrs"]})";
+        }
+        return "—";
+    }
+
+    private static bool TryClock(JsonElement e, string name, out DateTime dt)
+    {
+        dt = default;
+        return e.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(v.GetString(), CultureInfo.InvariantCulture,
+                   DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto)
+            && (dt = dto.UtcDateTime) != default;
+    }
+}

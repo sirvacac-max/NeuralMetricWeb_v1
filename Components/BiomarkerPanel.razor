@@ -1,0 +1,60 @@
+@using System.Globalization
+@using NeuralMetricWeb_v1.Models
+@implements IDisposable
+@inject NeuralMetricWeb_v1.Services.Localization L
+
+<section class="panel" aria-label="Biomarkers">
+    <header class="panel-head">
+        <h2 class="panel-title">@L["Biomarkers"]</h2>
+        <p class="panel-sub">@L[WindowLabel] @WindowText</p>
+    </header>
+
+    <p class="panel-section">@L["Spectral distribution"]</p>
+    <p class="panel-note">@L["Delta + theta + alpha + beta = 100% of 0.5-30 Hz power"]</p>
+
+    <div class="band-grid">
+        @foreach (var b in Bands)
+        {
+            <article class="band" style="--c:@b.Var">
+                <div class="band-label">@b.Label</div>
+                <div class="band-value">@Fmt(b.Pct, "F1")<span class="band-unit">%</span></div>
+                <div class="band-abs">@Fmt(b.Uv2, "F2") µV²</div>
+                <div class="meter"><div class="meter-fill" style="width:@Fmt(Math.Clamp(b.Pct, 0, 100), "F1")%"></div></div>
+            </article>
+        }
+        <article class="band" style="--c:var(--accent)">
+            <div class="band-label">SEF95 (0.5-30 Hz)</div>
+            <div class="band-value">@Fmt(Result.Sef95Hz, "F2")<span class="band-unit">Hz</span></div>
+            <div class="band-abs">@L["Spectral edge"]</div>
+            <div class="meter"><div class="meter-fill" style="width:@Fmt(Math.Clamp(Result.Sef95Hz / 30 * 100, 0, 100), "F1")%"></div></div>
+        </article>
+    </div>
+
+    <p class="panel-method">@L["Absolute power (µV²) is integrated band power and scales with the recording amplitude; relative power (%) does not."]</p>
+    <p class="panel-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public AnalysisResult Result { get; set; } = default!;
+    [Parameter] public string WindowLabel { get; set; } = "Analyzed window";
+
+    protected override void OnInitialized() => L.OnChange += Render;
+    private void Render() => InvokeAsync(StateHasChanged);
+    public void Dispose() => L.OnChange -= Render;
+
+    private record Band(string Label, string Var, double Pct, double Uv2);
+
+    private IEnumerable<Band> Bands => new[]
+    {
+        new Band("Delta (0.5-4 Hz)", "var(--delta)", Result.DeltaPct, Result.DeltaUv2),
+        new Band("Theta (4-8 Hz)", "var(--theta)", Result.ThetaPct, Result.ThetaUv2),
+        new Band("Alpha (8-12 Hz)", "var(--alpha)", Result.AlphaPct, Result.AlphaUv2),
+        new Band("Beta (12-30 Hz)", "var(--beta)", Result.BetaPct, Result.BetaUv2),
+    };
+
+    private string WindowText => Result.WindowMin is { Length: 2 } w
+        ? $"{Fmt(w[0], "0.#")} – {Fmt(w[1], "0.#")} min" : "";
+
+    private static string Fmt(double value, string format) =>
+        value.ToString(format, CultureInfo.InvariantCulture);
+}

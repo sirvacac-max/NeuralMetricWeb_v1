@@ -47,6 +47,11 @@ def clean(x, fs, cfg=CFG):
     """Zero-phase band-pass, then notch (desktop qc.clean)."""
     x = np.asarray(x, dtype=float)
     lo, hi = cfg["bandpass_hz"]
+    nyq = fs / 2.0
+    hi = min(hi, 0.95 * nyq)      # clamp high edge below Nyquist for low-fs files
+    lo = max(lo, 1e-6)
+    if not (0.0 < lo < hi):       # fs too low for any band-pass: de-mean only
+        return x - np.mean(x)
     sos = butter(cfg["bandpass_order"], [lo, hi], "band", fs=fs, output="sos")
     y = sosfiltfilt(sos, x)
     if cfg["notch_hz"] and cfg["notch_hz"] < fs / 2:
@@ -344,6 +349,112 @@ def spectral_trends(blocks, fs, preset="v3_default", bin_s=30.0, cfg=CFG):
                   "abs_uv2": absu, "relative_pct": rel, "total_uv2": totu, "column_status": status},
     }
 
+
+def _sweep_step_flag(dsa):
+    # Point 1: flag an abrupt, sustained ~2x step in SEF95 across the DSA,
+    # i.e. a likely mid-recording sweep-speed change (frequency axis unreliable).
+    if not dsa:
+        return None
+    t = dsa.get("time_min") or []
+    s = dsa.get("sef95_hz") or []
+    pts = [(float(a), float(b)) for a, b in zip(t, s) if b is not None and b > 1.0]
+    if len(pts) < 12:
+        return None
+    tm = np.array([p[0] for p in pts])
+    sef = np.array([p[1] for p in pts])
+    sm = sef.copy()
+    for i in range(1, sef.size - 1):
+        sm[i] = np.median(sef[i - 1:i + 2])
+    half = 6
+    best = None
+    for i in range(half, sm.size - half):
+        before = float(np.median(sm[i - half:i]))
+        after = float(np.median(sm[i:i + half]))
+        if before <= 0:
+            continue
+        ratio = after / before
+        if (1.7 <= ratio <= 2.3) or (0.43 <= ratio <= 0.59):
+            score = min(abs(ratio - 2.0), abs(ratio - 0.5))
+            if best is None or score < best[0]:
+                best = (score, float(tm[i]), ratio, before, after)
+    if best is None:
+        return None
+    _, at, ratio, before, after = best
+    return {"at_min": round(at, 1), "ratio": round(ratio, 2),
+            "from_hz": round(before, 1), "to_hz": round(after, 1)}
+
+
+def _clip_epoch_flag(blocks, fs, thresh_pct=25.0):
+    # Point 2: per-1-min clipped-sample percentage and how many epochs exceed the threshold.
+    mins, sats = [], []
+    for b in blocks:
+        x = np.asarray(b["x"], dtype=float)
+        sat = np.asarray(b["sat"], dtype=float)
+        n = x.size
+        if n == 0:
+            continue
+        t = b["t_start"] + np.arange(n) / fs
+        mins.append((t / 60.0).astype(int))
+        sats.append(sat)
+    if not mins:
+        return None
+    mn = np.concatenate(mins)
+    sat = np.concatenate(sats)
+    nbins = int(mn.max()) + 1
+    tot = np.bincount(mn, minlength=nbins).astype(float)
+    clp = np.bincount(mn, weights=sat, minlength=nbins)
+    valid = tot > 0
+    pct = np.zeros(nbins)
+    pct[valid] = 100.0 * clp[valid] / tot[valid]
+    over = int(np.sum(pct[valid] > thresh_pct))
+    return {"max_epoch_pct": round(float(pct[valid].max()) if valid.any() else 0.0, 1),
+            "epochs_over_pct": over, "n_epochs": int(valid.sum()),
+            "thresh_pct": thresh_pct, "high": bool(over > 0)}
+
+
+def _quant_flag(blocks, fs, step_coarse_uv=2.0):
+    # Point 3: coarse amplitude quantization -> inflated high-frequency/beta power.
+    parts = [np.asarray(b["x"], dtype=float) for b in blocks if len(b["x"])]
+    if not parts:
+        return None
+    xs = np.concatenate(parts)
+    if xs.size > 600000:
+        xs = xs[:600000]
+    if xs.size < int(fs * 4):
+        return None
+    u = np.unique(np.round(xs, 3))
+    d = np.diff(u)
+    d = d[d > 1e-6]
+    step = float(np.median(d)) if d.size else 0.0
+    nw = int(fs * 4)
+    k = xs.size // nw if nw else 0
+    if k:
+        W = xs[:k * nw].reshape(k, nw)
+        states = np.array([np.unique(np.round(W[j], 3)).size for j in range(k)])
+        med_states = int(np.median(states))
+    else:
+        med_states = int(u.size)
+    zeroline = float(100.0 * np.mean(np.abs(xs) < max(step, 1e-6) / 2))
+    return {"step_uv": round(step, 3), "distinct_states": med_states,
+            "zeroline_pct": round(zeroline, 2), "coarse": bool(step >= step_coarse_uv)}
+
+
+def qc_flags(blocks, fs, resolution_uv, dsa=None):
+    # SedLine display-export QC screens (detect-and-flag only; no data is altered).
+    out = {"sweep_step": None, "clip": None, "quant": None}
+    try:
+        out["sweep_step"] = _sweep_step_flag(dsa)
+    except Exception:
+        out["sweep_step"] = None
+    try:
+        out["clip"] = _clip_epoch_flag(blocks, fs)
+    except Exception:
+        out["clip"] = None
+    try:
+        out["quant"] = _quant_flag(blocks, fs)
+    except Exception:
+        out["quant"] = None
+    return out
 
 def self_test(fs=256.0, seconds=120.0):
     """Synthetic check: 10 µV sine at 10 Hz plus white noise.
@@ -889,6 +1000,10 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
         result["bsr_trend"] = _bsr_trend_obj(bsr_analysis(sess, None, CFG)["trend_per_min_pct"])
     except Exception:
         result["bsr_trend"] = None
+    try:
+        result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
+    except Exception:
+        result["qc_flags"] = None
     return result
 
 
@@ -925,4 +1040,8 @@ def run_review(blocks, fs, resolution_uv, preset="v3_default"):
     except Exception:
         result["bsr"] = None
         result["bsr_trend"] = None
+    try:
+        result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
+    except Exception:
+        result["qc_flags"] = None
     return result

@@ -33,6 +33,17 @@ function pickEegChannel(labels, preferred) {
     }
     return null;
 }
+
+// Ipsilateral partner of a SedLine frontal channel: L1<->L2 (left), R1<->R2 (right).
+function ipsilateralPartner(label, labels) {
+    if (!label) return null;
+    const m = label.toUpperCase().match(/([LR][12])/);
+    if (!m) return null;
+    const partner = { L1: "L2", L2: "L1", R1: "R2", R2: "R1" }[m[1]];
+    if (!partner) return null;
+    const hit = labels.find((l) => l.toUpperCase().includes(partner));
+    return hit && hit !== label ? hit : null;
+}
 const r = (v, d = 2) => Math.round(v * 10 ** d) / 10 ** d;
 
 const concat = (parts, Type) => {
@@ -181,6 +192,7 @@ export async function buildSession(insp) {
     let cursor = 0;
     let resolution = 0;
     let recordedS = 0;
+    let selSat = 0, selN = 0;
 
     for (const f of files) {
         const c = await readChannel(f._file, f._h, f._channel || channel);
@@ -198,6 +210,7 @@ export async function buildSession(insp) {
         for (let k = 0; k < x.length; k++) {
             if (x[k] <= lo + step / 2 || x[k] >= hi - step / 2) { sat[k] = 1; nSat++; }
         }
+        selSat += nSat; selN += x.length;
 
         const n = x.length;
         const startS = (f.start - t0) / 1000;
@@ -244,6 +257,29 @@ export async function buildSession(insp) {
     const kept = trimBlocks(blocks, fs, events);
     if (!kept.length) throw new Error("No usable EEG after flat-segment removal");
 
+    // Point 4: ipsilateral clean-channel recommendation (SedLine 4-channel montage).
+    let channel_advice = null;
+    try {
+        const partnerLbl = ipsilateralPartner(channel, files[0]._h.labels);
+        if (partnerLbl) {
+            let pSat = 0, pN = 0;
+            for (const f of files) {
+                const pc = await readChannel(f._file, f._h, partnerLbl);
+                const lo2 = pc.phys_min, hi2 = pc.phys_max, step2 = pc.resolution;
+                const px = pc.x;
+                pN += px.length;
+                for (let k = 0; k < px.length; k++) {
+                    if (px[k] <= lo2 + step2 / 2 || px[k] >= hi2 - step2 / 2) pSat++;
+                }
+            }
+            const selPct = selN ? 100 * selSat / selN : 0;
+            const parPct = pN ? 100 * pSat / pN : 0;
+            if (selPct - parPct >= 10 && parPct <= 10) {
+                channel_advice = { from: channel, from_pct: r(selPct, 1), to: partnerLbl, to_pct: r(parPct, 1) };
+            }
+        }
+    } catch (e) { }
+
     // Recording-quality summary: resolution (gain) and sampling-rate changes, lead-off / clipping.
     const stepVals = [...new Set(stitchLog.map((e) => e.resolution_uv))];
     const fsVals = [...new Set(stitchLog.map((e) => e.fs_hz))];
@@ -253,11 +289,15 @@ export async function buildSession(insp) {
         resolution_values_uv: stepVals,
         fs_changed: fsVals.length > 1,
         fs_values_hz: fsVals,
+        low_fs: fs < 84.21,
+        low_fs_hz: r(fs, 1),
+        band_hi_hz: r(Math.min(40, 0.95 * fs / 2), 1),
         files_excluded: insp.infos.length - files.length,
         blocks_dropped: events.filter((e) => e.type === "block_dropped").length,
         segments_trimmed: events.filter((e) => e.type === "trimmed").length,
         max_clipped_pct: r(maxClip, 2),
         annotations_count: annotations.length,
+        channel_advice,
     };
 
     // Session end: last file's header start plus its recorded duration (header clock, as written).
@@ -309,6 +349,7 @@ export async function buildBisSession(triplet, channelIndex = 0) {
     const quality = {
         resolution_changed: false, resolution_values_uv: [r(hdr.gain[ci], 4)],
         fs_changed: false, fs_values_hz: [r(fs, 2)], files_excluded: 0,
+        low_fs: fs < 84.21, low_fs_hz: r(fs, 1), band_hi_hz: r(Math.min(40, 0.95 * fs / 2), 1),
         blocks_dropped: events.filter((e) => e.type === "block_dropped").length,
         segments_trimmed: events.filter((e) => e.type === "trimmed").length,
         max_clipped_pct: r((100 * nSat) / n, 2), annotations_count: 0,

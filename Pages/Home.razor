@@ -815,6 +815,45 @@
             notes.Add(string.Format(L["Up to {0}% of samples reached the amplifier limits (possible electrode lead-off or clipping)."], mc.GetDouble().ToString("0.#", inv)));
         if (q.TryGetProperty("blocks_dropped", out var bd) && bd.ValueKind == JsonValueKind.Number && bd.GetInt32() > 0)
             notes.Add(string.Format(L["{0} segment(s) were dropped as sensor-off (electrode lead-off)."], bd.GetInt32()));
+        if (q.TryGetProperty("channel_advice", out var ca) && ca.ValueKind == JsonValueKind.Object)
+        {
+            string frm = ca.TryGetProperty("from", out var cf) && cf.ValueKind == JsonValueKind.String ? cf.GetString()! : "";
+            string to2 = ca.TryGetProperty("to", out var ct) && ct.ValueKind == JsonValueKind.String ? ct.GetString()! : "";
+            double fp = ca.TryGetProperty("from_pct", out var fpp) && fpp.ValueKind == JsonValueKind.Number ? fpp.GetDouble() : 0;
+            double tp = ca.TryGetProperty("to_pct", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0;
+            notes.Add(string.Format(L["Channel {0} is {1}% clipped; the ipsilateral channel {2} is only {3}% — consider switching to it."], frm, fp.ToString("0.#", inv), to2, tp.ToString("0.#", inv)));
+        }
+        if (q.TryGetProperty("low_fs", out var lf) && lf.ValueKind == JsonValueKind.True)
+        {
+            double fsHz = q.TryGetProperty("low_fs_hz", out var lfh) && lfh.ValueKind == JsonValueKind.Number ? lfh.GetDouble() : 0;
+            double hiHz = q.TryGetProperty("band_hi_hz", out var bh) && bh.ValueKind == JsonValueKind.Number ? bh.GetDouble() : 0;
+            notes.Add(string.Format(L["Sampling rate {0} Hz is low (Nyquist {1} Hz): the analysis band is limited to {2} Hz — high-frequency content and the pEEG composite may be unreliable."],
+                fsHz.ToString("0.#", inv), (fsHz / 2).ToString("0.#", inv), hiHz.ToString("0.#", inv)));
+        }
+        if (raw.TryGetProperty("qc_flags", out var qf) && qf.ValueKind == JsonValueKind.Object)
+        {
+            if (qf.TryGetProperty("sweep_step", out var sw) && sw.ValueKind == JsonValueKind.Object)
+            {
+                double at = sw.TryGetProperty("at_min", out var a0) && a0.ValueKind == JsonValueKind.Number ? a0.GetDouble() : 0;
+                double fr = sw.TryGetProperty("from_hz", out var f0) && f0.ValueKind == JsonValueKind.Number ? f0.GetDouble() : 0;
+                double to = sw.TryGetProperty("to_hz", out var t0) && t0.ValueKind == JsonValueKind.Number ? t0.GetDouble() : 0;
+                notes.Add(string.Format(L["Possible sweep-speed change near {0} min (dominant frequency {1}→{2} Hz): the frequency axis may be unreliable there — verify the monitor sweep speed."], at.ToString("0.#", inv), fr.ToString("0.#", inv), to.ToString("0.#", inv)));
+            }
+            if (qf.TryGetProperty("clip", out var cl) && cl.ValueKind == JsonValueKind.Object
+                && cl.TryGetProperty("high", out var ch) && ch.ValueKind == JsonValueKind.True)
+            {
+                int over = cl.TryGetProperty("epochs_over_pct", out var eo) && eo.ValueKind == JsonValueKind.Number ? eo.GetInt32() : 0;
+                double mx = cl.TryGetProperty("max_epoch_pct", out var mp) && mp.ValueKind == JsonValueKind.Number ? mp.GetDouble() : 0;
+                double th = cl.TryGetProperty("thresh_pct", out var tp) && tp.ValueKind == JsonValueKind.Number ? tp.GetDouble() : 25;
+                notes.Add(string.Format(L["{0} one-minute epoch(s) exceed {1}% clipped samples (up to {2}%); clipped segments are excluded from analysis."], over, th.ToString("0", inv), mx.ToString("0.#", inv)));
+            }
+            if (qf.TryGetProperty("quant", out var qn) && qn.ValueKind == JsonValueKind.Object
+                && qn.TryGetProperty("coarse", out var qcf) && qcf.ValueKind == JsonValueKind.True)
+            {
+                double st = qn.TryGetProperty("step_uv", out var su) && su.ValueKind == JsonValueKind.Number ? su.GetDouble() : 0;
+                notes.Add(string.Format(L["Coarse amplitude quantization (~{0} µV steps): high-frequency and beta-band power may be inflated."], st.ToString("0.##", inv)));
+            }
+        }
         return notes;
     }
 

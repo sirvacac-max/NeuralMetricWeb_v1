@@ -154,6 +154,7 @@ function attachMeta(data, sess) {
         annotations: sess.annotations || [],
         device: sess.device || null,
         feed_check: feedDurationCheck(sess.stitch_log),
+        gaps: sess.gaps || [],
     };
 }
 

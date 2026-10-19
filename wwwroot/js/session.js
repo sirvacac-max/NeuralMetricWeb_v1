@@ -257,6 +257,18 @@ export async function buildSession(insp) {
     const kept = trimBlocks(blocks, fs, events);
     if (!kept.length) throw new Error("No usable EEG after flat-segment removal");
 
+    // Explicit gap markers: recording gaps between stitched blocks, on the session clock,
+    // so the timeline/DSA can mark them instead of implying continuous time (von Dincklage 2021).
+    const gaps = [];
+    for (let i = 1; i < kept.length; i++) {
+        const prevEnd = kept[i - 1].t_start + kept[i - 1].x.length / fs;
+        const g = kept[i].t_start - prevEnd;
+        if (g > RULES.maxGapS) {
+            gaps.push({ after_min: r(prevEnd / 60, 2), gap_min: r(g / 60, 2),
+                to_min: r(kept[i].t_start / 60, 2), kind: "gap" });
+        }
+    }
+
     // Point 4: ipsilateral clean-channel recommendation (SedLine 4-channel montage).
     let channel_advice = null;
     try {
@@ -318,6 +330,7 @@ export async function buildSession(insp) {
         quality,
         annotations,
         events,
+        gaps,
         blocks: kept,
     };
 }
@@ -373,6 +386,6 @@ export async function buildBisSession(triplet, channelIndex = 0) {
         files_used: 1, files_total: 1,
         recorded_min: r(durS / 60),
         analysable_min: r(kept.reduce((s2, b) => s2 + b.x.length, 0) / fs / 60),
-        stitch_log: stitchLog, quality, annotations: [], events, blocks: kept,
+        stitch_log: stitchLog, quality, annotations: [], events, gaps: [], blocks: kept,
     };
 }

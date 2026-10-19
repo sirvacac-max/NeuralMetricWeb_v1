@@ -80,6 +80,7 @@ public sealed class Localization
         ["The monitor appears to high-pass the signal (slow activity attenuated below ~{0} Hz): delta-band power and depth estimates may be underread."] = "El monitor parece aplicar un filtro pasa-altas (actividad lenta atenuada por debajo de ~{0} Hz): la potencia en banda delta y las estimaciones de profundidad pueden quedar subestimadas.",
         ["Noise-adaptive BSR ({0}%) differs from the fixed-threshold BSR because the noise floor is elevated (~{1} µV): interpret burst suppression together with signal quality."] = "La BSR adaptada al ruido ({0}%) difiere de la BSR de umbral fijo porque el piso de ruido está elevado (~{1} µV): interprete la brote-supresión junto con la calidad de la señal.",
         ["{0} recording gap(s) totalling {1} min interrupt the recording; the trends are not continuous across them."] = "{0} interrupción(es) de grabación que suman {1} min; las tendencias no son continuas a través de ellas.",
+        ["Analysis runtime"] = "Tiempo de análisis",
         ["Flag:"] = "Alerta:",
         ["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."] = "Solo para uso educativo y de investigación. No lo use para decisiones clínicas por sí solo: combínelo siempre con otros signos clínicos y parámetros de monitoreo.",
         ["Educational & research"] = "Educativo e investigación",

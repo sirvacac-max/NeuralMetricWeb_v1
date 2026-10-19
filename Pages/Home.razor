@@ -45,7 +45,7 @@
             </div>
             @if (_fileCount > 0)
             {
-                <p class="file-count">~@_recMin @L["min"]@(EstLine)</p>
+                <p class="file-count">~@_recMin @L["min"]</p>
                 @if (_channelOpts.Count > 0)
                 {
                     <p class="step-num">@L["Channel"]</p>
@@ -89,7 +89,7 @@
             </div>
             @if (_fileCount > 0)
             {
-                <p class="file-count">~@_recMin @L["min"]@(EstLine)</p>
+                <p class="file-count">~@_recMin @L["min"]</p>
                 @if (_channelOpts.Count > 0)
                 {
                     <p class="step-num">@L["Channel"]</p>
@@ -123,7 +123,7 @@
                 <li class="step @StepClass(2)"><span class="step-dot"></span><span class="step-label">@L["Processing"]</span></li>
                 <li class="step @StepClass(3)"><span class="step-dot"></span><span class="step-label">@L["Done"]</span></li>
             </ol>
-            <span class="step-time mono">@ElapsedText@ProcEst</span>
+            <span class="step-time mono">@RuntimeText</span>
         </div>
     }
 </section>
@@ -418,7 +418,6 @@
     private string? _selectedChannel;
     private string _sourceType = "edf";
     private int _recMin;
-    private int? _estSeconds;
     private TimeOnly? _startClock;
     private TimeOnly? _endClock;
     private DateTime? _sessionStart;
@@ -476,7 +475,6 @@
         var info = await Analysis.SessionInfoAsync(inputId);
         _fileCount = info.Count;
         _recMin = info.Minutes;
-        _estSeconds = info.Est;
 
         _channelOpts = new();
         _selectedChannel = null;
@@ -1050,11 +1048,7 @@
     private string StepClass(int i) =>
         _stage > i ? "done" : (_stage == i ? (_stage == 3 ? "done" : "active") : "pending");
 
-    private static string FmtSec(int s) =>
-        s < 60 ? $"{s} s" : $"{s / 60}:{(s % 60).ToString("00", CultureInfo.InvariantCulture)} min";
-
-    private string EstLine => _estSeconds is int s ? $" · {L["est"]} ~{FmtSec(s)}" : "";
-    private string ProcEst => (_stage == 2 && _estSeconds is int s) ? $" / ~{FmtSec(s)}" : "";
+    private string RuntimeText => (_stage == 3 ? $"{L["Analysis runtime"]}: " : "") + ElapsedText;
 
     private string ElapsedText
     {

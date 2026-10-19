@@ -858,7 +858,7 @@
                     string ff = sm.TryGetProperty("file", out var sf) && sf.ValueKind == JsonValueKind.String ? sf.GetString()! : "";
                     double cm = sm.TryGetProperty("claimed_min", out var scm) && scm.ValueKind == JsonValueKind.Number ? scm.GetDouble() : 0;
                     double km = sm.TryGetProperty("clock_min", out var skm) && skm.ValueKind == JsonValueKind.Number ? skm.GetDouble() : 0;
-                    notes.Add(string.Format(L["Possible feed / sampling-rate change: '{0}' stores {1} min of data but spans {2} min of real time - the frequency axis may be wrong for that segment."], ff, cm.ToString("0.#", inv), km.ToString("0.#", inv)));
+                    notes.Add(string.Format(L["Possible feed / sampling-rate change: '{0}' stores {1} min of data but the next file starts {2} min later - a reliable frequency axis requires a constant feed."], ff, cm.ToString("0.#", inv), km.ToString("0.#", inv)));
                 }
             }
         }

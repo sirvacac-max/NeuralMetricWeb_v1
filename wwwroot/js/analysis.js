@@ -124,7 +124,9 @@ function feedDurationCheck(stitchLog) {
         const clock = ((b.start_min || 0) - (a.start_min || 0)) * 60;
         if (claimed <= 0 || clock <= 0) continue;
         const ratio = claimed / clock;
-        if (ratio <= 0.6 || ratio >= 1.8) {
+        // a 178<->89 Hz feed change shifts the stored duration by at most 2x; outside [0.45,0.9]U[1.12,2.2]
+        // the mismatch is a recording gap/overlap, not a feed change, so it is not flagged here.
+        if ((ratio >= 0.45 && ratio <= 0.9) || (ratio >= 1.12 && ratio <= 2.2)) {
             seams.push({ file: a.file, ratio: Math.round(ratio * 100) / 100,
                 claimed_min: Math.round((claimed / 60) * 10) / 10,
                 clock_min: Math.round((clock / 60) * 10) / 10 });

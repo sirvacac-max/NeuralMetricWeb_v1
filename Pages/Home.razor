@@ -893,6 +893,27 @@
                 double rsa = rcc.TryGetProperty("step_after_uv", out var ra2) && ra2.ValueKind == JsonValueKind.Number ? ra2.GetDouble() : 0;
                 notes.Add(string.Format(L["Possible vertical-resolution change near {0} min (amplitude step {1}→{2} µV): absolute band power may not be comparable across that point."], rat.ToString("0.#", inv), rsb.ToString("0.##", inv), rsa.ToString("0.##", inv)));
             }
+            if (qf.TryGetProperty("prefilter", out var pf) && pf.ValueKind == JsonValueKind.Object
+                && pf.TryGetProperty("prefiltered", out var pfd) && pfd.ValueKind == JsonValueKind.True)
+            {
+                double hc = pf.TryGetProperty("hp_cutoff_hz", out var hcx) && hcx.ValueKind == JsonValueKind.Number ? hcx.GetDouble() : 0;
+                notes.Add(string.Format(L["The monitor appears to high-pass the signal (slow activity attenuated below ~{0} Hz): delta-band power and depth estimates may be underread."], hc.ToString("0.#", inv)));
+            }
+        }
+        if (raw.TryGetProperty("bsr_adaptive", out var ba) && ba.ValueKind == JsonValueKind.Object
+            && ba.TryGetProperty("diverges", out var bad) && bad.ValueKind == JsonValueKind.True)
+        {
+            double af = ba.TryGetProperty("bsr_pct", out var bap) && bap.ValueKind == JsonValueKind.Number ? bap.GetDouble() : 0;
+            double nf = ba.TryGetProperty("noise_floor_uv", out var bnf) && bnf.ValueKind == JsonValueKind.Number ? bnf.GetDouble() : 0;
+            notes.Add(string.Format(L["Noise-adaptive BSR ({0}%) differs from the fixed-threshold BSR because the noise floor is elevated (~{1} µV): interpret burst suppression together with signal quality."], af.ToString("0.#", inv), nf.ToString("0.#", inv)));
+        }
+        if (raw.TryGetProperty("gaps", out var gps) && gps.ValueKind == JsonValueKind.Array && gps.GetArrayLength() > 0)
+        {
+            int ng = gps.GetArrayLength();
+            double tot = 0;
+            foreach (var gp in gps.EnumerateArray())
+                if (gp.ValueKind == JsonValueKind.Object && gp.TryGetProperty("gap_min", out var gm) && gm.ValueKind == JsonValueKind.Number) tot += gm.GetDouble();
+            notes.Add(string.Format(L["{0} recording gap(s) totalling {1} min interrupt the recording; the trends are not continuous across them."], ng, tot.ToString("0.#", inv)));
         }
         return notes;
     }

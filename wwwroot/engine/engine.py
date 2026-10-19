@@ -181,6 +181,15 @@ def spectral_features(f, P, bands=CFG["bands"]):
     cs = np.cumsum(P[tm])
     i = min(int(np.searchsorted(cs, 0.95 * tot)), int(tm.sum()) - 1)
     out["sef95_hz"] = float(f[tm][i])
+    # Reference-/gain-robust ratios (independent of absolute uV scale), additive.
+    a = out.get("alpha_uv2", 0.0)
+    d = out.get("delta_uv2", 0.0)
+    th = out.get("theta_uv2", 0.0)
+    be = out.get("beta_uv2", 0.0)
+    out["alpha_delta_ratio"] = round(a / d, 3) if d > 0 else None
+    sf = d + th
+    ff = a + be
+    out["slow_fast_ratio"] = round(sf / ff, 3) if ff > 0 else None
     return out
 
 
@@ -564,9 +573,83 @@ def _resolution_change_flag(blocks, fs):
             "step_before_uv": round(before, 3), "step_after_uv": round(after, 3)}
 
 
+def _prefilter_flag(blocks, fs, flag_cutoff_hz=1.5):
+    # Point 5 (monitor pre-filtering): a monitor high-pass removes slow (delta) power
+    # before export. Detected on the RAW signal as an elevated low-frequency roll-off:
+    # the lowest frequency at which the median PSD recovers to half of the 2-8 Hz
+    # reference density. Diagnostic only; no data is altered (von Dincklage 2021).
+    parts = [np.asarray(b["x"], dtype=float) for b in blocks if len(b["x"])]
+    if not parts:
+        return None
+    xs = np.concatenate(parts)
+    if xs.size > 600000:
+        xs = xs[:600000]
+    nw = int(round(4 * fs))
+    if nw < 8 or xs.size < nw:
+        return None
+    k = int(xs.size // nw)
+    if k < 4:
+        return None
+    W = xs[:k * nw].reshape(k, nw)
+    W = W - W.mean(axis=1, keepdims=True)
+    w = np.hanning(nw)
+    scale = fs * float((w ** 2).sum())
+    if scale <= 0:
+        return None
+    P = (np.abs(np.fft.rfft(W * w, axis=1)) ** 2) / scale
+    P[:, 1:-1] *= 2
+    pm = np.median(P, axis=0)
+    f = np.fft.rfftfreq(nw, 1 / fs)
+    mid = (f >= 2.0) & (f < 8.0)
+    if not bool(mid.any()):
+        return None
+    ref = float(np.median(pm[mid]))
+    if ref <= 0:
+        return None
+    lowband = (f >= 0.3) & (f < 1.0)
+    low = float(np.median(pm[lowband])) if bool(lowband.any()) else float("nan")
+    low_ratio = (low / ref) if (ref > 0 and math.isfinite(low)) else float("nan")
+    cutoff = None
+    half = 0.5 * ref
+    scan = [int(i) for i in np.flatnonzero((f >= 0.3) & (f <= 8.0))]
+    for i in scan:
+        if pm[i] >= half:
+            cutoff = float(f[i])
+            break
+    prefiltered = bool(cutoff is not None and cutoff >= flag_cutoff_hz)
+    return {"hp_cutoff_hz": round(cutoff, 2) if cutoff is not None else None,
+            "low_ratio": round(low_ratio, 3) if math.isfinite(low_ratio) else None,
+            "prefiltered": prefiltered}
+
+
+def _fs_report(fs):
+    # Point 1/2 (sampling rate & cross-device comparability): report the native rate,
+    # its Nyquist ceiling, the band actually usable, a device guess, and whether a
+    # common-rate resample would be needed to compare with another recording.
+    fs = float(fs)
+    nyq = fs / 2.0
+    lo, hi = CFG["bands"]["total"]
+    usable_hi = float(min(hi, 0.95 * nyq))
+    dev = "unknown"
+    if abs(fs - 128.0) <= 2.0:
+        dev = "BIS-like (~128 Hz)"
+    elif 170.0 <= fs <= 185.0:
+        dev = "SedLine-like (~178 Hz)"
+    elif abs(fs - 100.0) <= 2.0:
+        dev = "~100 Hz"
+    elif abs(fs - 256.0) <= 4.0:
+        dev = "~256 Hz"
+    common = 128.0
+    return {"native_fs_hz": round(fs, 2), "nyquist_hz": round(nyq, 2),
+            "usable_band_hz": [lo, round(usable_hi, 2)], "device_guess": dev,
+            "common_analysis_fs_hz": common,
+            "resample_needed_for_comparison": bool(abs(fs - common) > 1.0)}
+
+
 def qc_flags(blocks, fs, resolution_uv, dsa=None):
     # SedLine display-export QC screens (detect-and-flag only; no data is altered).
-    out = {"sweep_step": None, "clip": None, "quant": None, "resolution_change": None}
+    out = {"sweep_step": None, "clip": None, "quant": None, "resolution_change": None,
+           "prefilter": None, "comparability": None}
     try:
         out["sweep_step"] = _sweep_step_flag(dsa)
     except Exception:
@@ -583,6 +666,14 @@ def qc_flags(blocks, fs, resolution_uv, dsa=None):
         out["resolution_change"] = _resolution_change_flag(blocks, fs)
     except Exception:
         out["resolution_change"] = None
+    try:
+        out["prefilter"] = _prefilter_flag(blocks, fs)
+    except Exception:
+        out["prefilter"] = None
+    try:
+        out["comparability"] = _fs_report(fs)
+    except Exception:
+        out["comparability"] = None
     return out
 
 def self_test(fs=256.0, seconds=120.0):
@@ -1156,6 +1247,73 @@ def _bsr_trend_obj(per_min):
     return {"bin_s": 60, "time_min": [k + 0.5 for k in range(len(per_min))], "pct_per_min": per_min}
 
 
+def _noise_floor_uv(sess, cfg=CFG):
+    """Robust suppression-level noise floor: the 10th percentile of the per-0.5 s RMS
+    of the filtered signal across the recording. In a coarse or noisy recording this
+    floor rises, and a fixed 5 uV amplitude gate can misclassify suppression; the
+    adaptive BSR below uses this floor (Bennett 1948; Sarkela 2002)."""
+    fs = sess["fs"]
+    seg = int(round(0.5 * fs))
+    if seg < 4:
+        return None
+    vals = []
+    for b in sess["blocks"]:
+        x = np.asarray(b["x"], dtype=float)
+        if x.size < seg:
+            continue
+        xf = clean(x, fs, cfg)
+        k = int(xf.size // seg)
+        if k < 4:
+            continue
+        W = xf[:k * seg].reshape(k, seg)
+        vals.append(np.sqrt(np.mean(W ** 2, axis=1)))
+    if not vals:
+        return None
+    r = np.concatenate(vals)
+    if r.size < 8:
+        return None
+    return float(np.percentile(r, 10))
+
+
+def _adaptive_bsr(sess, window_min=None, cfg=CFG):
+    """BSR recomputed with an amplitude gate adapted to the measured noise floor,
+    reported ALONGSIDE the fixed-threshold BSR (the default is never changed here).
+    Adaptive gate = clamp(1.5 x noise floor, fixed gate, 12 uV)."""
+    nf = _noise_floor_uv(sess, cfg)
+    if nf is None:
+        return None
+    base = cfg.get("bsr_amp_uv") or 5.0
+    adapt = min(max(1.5 * nf, float(base)), 12.0)
+    cfg2 = dict(cfg)
+    cfg2["bsr_amp_uv"] = float(adapt)
+    try:
+        r = bsr_analysis(sess, window_min, cfg2)
+    except Exception:
+        return None
+    return {"noise_floor_uv": round(float(nf), 2), "amplitude_uv": round(float(adapt), 2),
+            "fixed_amplitude_uv": round(float(base), 2),
+            "bsr_pct": r.get("bsr_pct"), "suppression_min": r.get("suppression_min"),
+            "analysed_min": r.get("analysed_min")}
+
+
+def _attach_adaptive_bsr(result, sess, window_min, cfg=CFG):
+    """Attach adaptive BSR and a divergence flag next to result['bsr'] (additive)."""
+    try:
+        adp = _adaptive_bsr(sess, window_min, cfg)
+    except Exception:
+        adp = None
+    result["bsr_adaptive"] = adp
+    try:
+        fixed = (result.get("bsr") or {}).get("bsr_pct")
+        if adp is not None and fixed is not None and adp.get("bsr_pct") is not None:
+            diff = abs(float(adp["bsr_pct"]) - float(fixed))
+            result["bsr_adaptive"]["divergence_pct_points"] = round(diff, 2)
+            result["bsr_adaptive"]["diverges"] = bool(diff >= 2.0)
+    except Exception:
+        pass
+    return result
+
+
 def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=None):
     """Maintenance window (manual or automatic). When it is accepted, all biomarkers
     inside it. verdict is 'complete', 'manual' or 'rejected'; maintenance holds the details."""
@@ -1191,6 +1349,7 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
         import traceback as _tb
         result["bsr_trend"] = None
         result["bsr_trend_error"] = f"{type(_e).__name__}: {_e} | " + _tb.format_exc().strip().replace(chr(10), " ~ ")[-600:]
+    _attach_adaptive_bsr(result, sess, m["window"], CFG)
     try:
         result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
     except Exception:
@@ -1231,6 +1390,7 @@ def run_review(blocks, fs, resolution_uv, preset="v3_default"):
     except Exception:
         result["bsr"] = None
         result["bsr_trend"] = None
+    _attach_adaptive_bsr(result, sess, None, CFG)
     try:
         result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
     except Exception:

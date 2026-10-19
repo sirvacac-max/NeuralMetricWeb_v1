@@ -113,6 +113,26 @@ async function prepareSession(inputId, channel, report) {
     return sess;
 }
 
+// von Dincklage 2021 duration check: a file whose stored duration (n / header-fs) does not
+// match the real clock gap to the next file reveals an undocumented feed / sampling-rate change.
+function feedDurationCheck(stitchLog) {
+    if (!Array.isArray(stitchLog) || stitchLog.length < 2) return { seams: [], high: false, checked: false };
+    const seams = [];
+    for (let i = 0; i < stitchLog.length - 1; i++) {
+        const a = stitchLog[i], b = stitchLog[i + 1];
+        const claimed = (a.duration_min || 0) * 60;
+        const clock = ((b.start_min || 0) - (a.start_min || 0)) * 60;
+        if (claimed <= 0 || clock <= 0) continue;
+        const ratio = claimed / clock;
+        if (ratio <= 0.6 || ratio >= 1.8) {
+            seams.push({ file: a.file, ratio: Math.round(ratio * 100) / 100,
+                claimed_min: Math.round((claimed / 60) * 10) / 10,
+                clock_min: Math.round((clock / 60) * 10) / 10 });
+        }
+    }
+    return { seams, high: seams.length > 0, checked: true };
+}
+
 function attachMeta(data, sess) {
     return {
         ...data,
@@ -131,6 +151,7 @@ function attachMeta(data, sess) {
         quality: sess.quality,
         annotations: sess.annotations || [],
         device: sess.device || null,
+        feed_check: feedDurationCheck(sess.stitch_log),
     };
 }
 
@@ -146,7 +167,9 @@ export async function analyzeSelection(inputId, manualWindow, progress, channel)
         preset: "v3_default", manual_window: manualWindow ?? null,
     });
     report("done");
-    return attachMeta(data, sess);
+    const _result = attachMeta(data, sess);
+    try { window.__nmwResult = _result; } catch (e) { }
+    return _result;
 }
 
 // Re-run the report on the already-loaded session with a manual window (no re-read).
@@ -161,7 +184,9 @@ export async function reanalyzeWindow(manualWindow, progress) {
         preset: "v3_default", manual_window: manualWindow ?? null,
     });
     report("done");
-    return attachMeta(data, sess);
+    const _result = attachMeta(data, sess);
+    try { window.__nmwResult = _result; } catch (e) { }
+    return _result;
 }
 
 export function warmup() { try { startWorker(); } catch (e) { } }
@@ -177,7 +202,9 @@ export async function analyzeReview(inputId, progress, channel) {
         blocks: sess.blocks, fs: sess.fs, resolution_uv: sess.resolution_uv, preset: "v3_default",
     });
     report("done");
-    return attachMeta(data, sess);
+    const _result = attachMeta(data, sess);
+    try { window.__nmwResult = _result; } catch (e) { }
+    return _result;
 }
 
 // Count analyzable units in the selection: EDF files, or a BIS triplet (counts as 1).

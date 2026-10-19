@@ -159,6 +159,17 @@
             <div class="stat"><span class="stat-k">@L["Verdict"]</span><span class="stat-v"><span class="badge badge-@VerdictClass(raw)">@L[Text(raw, "verdict")]</span></span></div>
         </div>
 
+        @if (Text(raw, "report_verdict") == "rejected")
+        {
+            <div class="alert alert-warn" role="alert">
+                <strong>@L["No maintenance window was established - showing the full-session review instead."]</strong>
+                @foreach (var s in Strings(raw, "report_reasons"))
+                {
+                    <p>&bull; @LocalizeMsg(s)</p>
+                }
+            </div>
+        }
+
         @if (Strings(raw, "corrupt_files").Any())
         {
             <div class="alert alert-danger" role="alert">
@@ -616,21 +627,25 @@
         _drawCharts = false;
 
         double sharedX = 0;
-        if (raw.TryGetProperty("maintenance", out var mmx) && mmx.TryGetProperty("composite_trend", out var ctx)
+        if (raw.TryGetProperty("maintenance", out var mmx) && mmx.ValueKind == JsonValueKind.Object
+            && mmx.TryGetProperty("composite_trend", out var ctx) && ctx.ValueKind == JsonValueKind.Object
             && ctx.TryGetProperty("time_min", out var ctt) && ctt.ValueKind == JsonValueKind.Array && ctt.GetArrayLength() > 0)
             sharedX = Math.Max(sharedX, ctt[ctt.GetArrayLength() - 1].GetDouble());
-        if (raw.TryGetProperty("band_trend", out var btx) && btx.TryGetProperty("time_min", out var btt)
+        if (raw.TryGetProperty("band_trend", out var btx) && btx.ValueKind == JsonValueKind.Object
+            && btx.TryGetProperty("time_min", out var btt)
             && btt.ValueKind == JsonValueKind.Array && btt.GetArrayLength() > 0)
         {
             double binS = btx.TryGetProperty("bin_s", out var bs) ? bs.GetDouble() : 30;
             sharedX = Math.Max(sharedX, btt[btt.GetArrayLength() - 1].GetDouble() + binS / 120);
         }
         _sharedX = sharedX > 0 ? sharedX : 1;
-        if (raw.TryGetProperty("bsr_trend", out var brx) && brx.TryGetProperty("time_min", out var brt)
+        if (raw.TryGetProperty("bsr_trend", out var brx) && brx.ValueKind == JsonValueKind.Object
+            && brx.TryGetProperty("time_min", out var brt)
             && brt.ValueKind == JsonValueKind.Array && brt.GetArrayLength() > 0)
             _sharedX = Math.Max(_sharedX, brt[brt.GetArrayLength() - 1].GetDouble() + 0.5);
 
-        if (raw.TryGetProperty("maintenance", out var m) && m.TryGetProperty("composite_trend", out var tr)
+        if (raw.TryGetProperty("maintenance", out var m) && m.ValueKind == JsonValueKind.Object
+            && m.TryGetProperty("composite_trend", out var tr)
             && tr.ValueKind == JsonValueKind.Object)
         {
             var time = tr.GetProperty("time_min").EnumerateArray().Select(e => e.GetDouble()).ToArray();
@@ -830,9 +845,27 @@
             notes.Add(string.Format(L["Sampling rate {0} Hz is low (Nyquist {1} Hz): the analysis band is limited to {2} Hz — high-frequency content and the pEEG composite may be unreliable."],
                 fsHz.ToString("0.#", inv), (fsHz / 2).ToString("0.#", inv), hiHz.ToString("0.#", inv)));
         }
+        bool feedChecked = false, feedFlag = false;
+        if (raw.TryGetProperty("feed_check", out var fcx) && fcx.ValueKind == JsonValueKind.Object)
+        {
+            feedChecked = fcx.TryGetProperty("checked", out var fck) && fck.ValueKind == JsonValueKind.True;
+            if (fcx.TryGetProperty("seams", out var fseams) && fseams.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var sm in fseams.EnumerateArray())
+                {
+                    if (sm.ValueKind != JsonValueKind.Object) continue;
+                    feedFlag = true;
+                    string ff = sm.TryGetProperty("file", out var sf) && sf.ValueKind == JsonValueKind.String ? sf.GetString()! : "";
+                    double cm = sm.TryGetProperty("claimed_min", out var scm) && scm.ValueKind == JsonValueKind.Number ? scm.GetDouble() : 0;
+                    double km = sm.TryGetProperty("clock_min", out var skm) && skm.ValueKind == JsonValueKind.Number ? skm.GetDouble() : 0;
+                    notes.Add(string.Format(L["Possible feed / sampling-rate change: '{0}' stores {1} min of data but spans {2} min of real time - the frequency axis may be wrong for that segment."], ff, cm.ToString("0.#", inv), km.ToString("0.#", inv)));
+                }
+            }
+        }
+
         if (raw.TryGetProperty("qc_flags", out var qf) && qf.ValueKind == JsonValueKind.Object)
         {
-            if (qf.TryGetProperty("sweep_step", out var sw) && sw.ValueKind == JsonValueKind.Object)
+            if (!(feedChecked && !feedFlag) && qf.TryGetProperty("sweep_step", out var sw) && sw.ValueKind == JsonValueKind.Object)
             {
                 double at = sw.TryGetProperty("at_min", out var a0) && a0.ValueKind == JsonValueKind.Number ? a0.GetDouble() : 0;
                 double fr = sw.TryGetProperty("from_hz", out var f0) && f0.ValueKind == JsonValueKind.Number ? f0.GetDouble() : 0;
@@ -852,6 +885,13 @@
             {
                 double st = qn.TryGetProperty("step_uv", out var su) && su.ValueKind == JsonValueKind.Number ? su.GetDouble() : 0;
                 notes.Add(string.Format(L["Coarse amplitude quantization (~{0} µV steps): high-frequency and beta-band power may be inflated."], st.ToString("0.##", inv)));
+            }
+            if (qf.TryGetProperty("resolution_change", out var rcc) && rcc.ValueKind == JsonValueKind.Object)
+            {
+                double rat = rcc.TryGetProperty("at_min", out var ra0) && ra0.ValueKind == JsonValueKind.Number ? ra0.GetDouble() : 0;
+                double rsb = rcc.TryGetProperty("step_before_uv", out var rb0) && rb0.ValueKind == JsonValueKind.Number ? rb0.GetDouble() : 0;
+                double rsa = rcc.TryGetProperty("step_after_uv", out var ra2) && ra2.ValueKind == JsonValueKind.Number ? ra2.GetDouble() : 0;
+                notes.Add(string.Format(L["Possible vertical-resolution change near {0} min (amplitude step {1}→{2} µV): absolute band power may not be comparable across that point."], rat.ToString("0.#", inv), rsb.ToString("0.##", inv), rsa.ToString("0.##", inv)));
             }
         }
         return notes;

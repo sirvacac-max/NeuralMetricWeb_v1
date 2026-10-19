@@ -26,6 +26,9 @@ CFG = {
     "bsr_ll_threshold_uv": 40.0,  # line-length threshold
     "bsr_min_episode_s": 1.0,     # minimum suppression episode
     "bsr_amp_uv": 5.0,            # |amplitude| <= 5 uV; None = pure v2 line length
+    "bsr_imp_bridge_s": 4.0,      # join sub-gaps to rebuild a fragmented low-amplitude island
+    "bsr_imp_max_s": 10.0,        # isolated island <= this may be a device impedance check
+    "bsr_imp_isolation_s": 120.0, # min analysed EEG separating it from other suppression
     "presets": {
         "v3_default": ("flat", "saturation", "stuck", "amplitude"),
         "study_replication": ("flat", "amplitude"),
@@ -52,12 +55,15 @@ def clean(x, fs, cfg=CFG):
     lo = max(lo, 1e-6)
     if not (0.0 < lo < hi):       # fs too low for any band-pass: de-mean only
         return x - np.mean(x)
-    sos = butter(cfg["bandpass_order"], [lo, hi], "band", fs=fs, output="sos")
-    y = sosfiltfilt(sos, x)
-    if cfg["notch_hz"] and cfg["notch_hz"] < fs / 2:
-        b, a = iirnotch(cfg["notch_hz"], cfg["notch_q"], fs)
-        y = filtfilt(b, a, y)
-    return y
+    try:
+        sos = butter(cfg["bandpass_order"], [lo, hi], "band", fs=fs, output="sos")
+        y = sosfiltfilt(sos, x)
+        if cfg["notch_hz"] and cfg["notch_hz"] < fs / 2:
+            b, a = iirnotch(cfg["notch_hz"], cfg["notch_q"], fs)
+            y = filtfilt(b, a, y)
+        return y
+    except ValueError:            # block too short to filter (len <= padlen): de-mean only
+        return x - np.mean(x)
 
 
 def stuck_mask(x, sat, fs, min_s):
@@ -362,6 +368,16 @@ def _sweep_step_flag(dsa):
         return None
     tm = np.array([p[0] for p in pts])
     sef = np.array([p[1] for p in pts])
+    # per-column total power (uV2) from the DSA, aligned to the same valid points
+    cols = dsa.get("power_db") or []
+    tall = dsa.get("time_min") or []
+    pw_by_t = {}
+    for tt, col in zip(tall, cols):
+        if col is None:
+            continue
+        a = np.asarray(col, dtype=float)
+        pw_by_t[round(float(tt), 4)] = float(np.sum(10.0 ** (a / 10.0)))
+    pw = np.array([pw_by_t.get(round(float(p0), 4), np.nan) for p0 in tm])
     sm = sef.copy()
     for i in range(1, sef.size - 1):
         sm[i] = np.median(sef[i - 1:i + 2])
@@ -374,6 +390,19 @@ def _sweep_step_flag(dsa):
             continue
         ratio = after / before
         if (1.7 <= ratio <= 2.3) or (0.43 <= ratio <= 0.59):
+            # abruptness: the single-bin jump at the seam must dominate the before->after change
+            if sm[i - 1] <= 0:
+                continue
+            jump = abs(np.log2(sm[i] / sm[i - 1]))
+            total = abs(np.log2(after / before))
+            if total <= 1e-9 or jump < 0.6 * total:
+                continue
+            # a true feed/sweep change relabels frequencies at ~constant power; a depth change
+            # (e.g. onset of suppression) collapses power. Require power to be roughly preserved.
+            pb = np.nanmedian(pw[max(0, i - half):i])
+            pa = np.nanmedian(pw[i:i + half])
+            if np.isfinite(pb) and np.isfinite(pa) and pb > 0 and (pa / pb) < 0.6:
+                continue
             score = min(abs(ratio - 2.0), abs(ratio - 0.5))
             if best is None or score < best[0]:
                 best = (score, float(tm[i]), ratio, before, after)
@@ -384,36 +413,70 @@ def _sweep_step_flag(dsa):
             "from_hz": round(before, 1), "to_hz": round(after, 1)}
 
 
-def _clip_epoch_flag(blocks, fs, thresh_pct=25.0):
-    # Point 2: per-1-min clipped-sample percentage and how many epochs exceed the threshold.
-    mins, sats = [], []
+def _const_run_mask(x, run_len):
+    """Samples that lie inside a constant (horizontal) run of at least run_len identical
+    values - the signature of a clipped/flat trace (von Dincklage 2021 used >= 10 samples)."""
+    n = x.size
+    out = np.zeros(n, dtype=bool)
+    if n < run_len:
+        return out
+    flat = np.zeros(n, dtype=bool)
+    flat[1:] = (np.diff(x) == 0.0)            # True where a sample equals the previous one
+    f = flat.astype(np.int8)
+    d = np.diff(np.concatenate(([0], f, [0])))
+    starts = np.flatnonzero(d == 1)
+    ends = np.flatnonzero(d == -1)
+    for st, en in zip(starts, ends):
+        if (en - st) + 1 >= run_len:          # (en-st)+1 identical samples in a row
+            out[st - 1:en] = True
+    return out
+
+
+def _clip_epoch_flag(blocks, fs, thresh_pct=25.0, exclude_pct=5.0, run_len=10):
+    # Point 2 (clipping): a sample is clipped if it is at the display saturation limits (sat)
+    # OR inside a horizontal run of >= run_len identical values (von Dincklage 2021). Reported
+    # per 1-min epoch; minutes above exclude_pct are flagged for exclusion (Bogli 2024).
+    mins, clips, flatzs = [], [], []
     for b in blocks:
         x = np.asarray(b["x"], dtype=float)
-        sat = np.asarray(b["sat"], dtype=float)
+        sat = np.asarray(b["sat"], dtype=bool)
         n = x.size
         if n == 0:
             continue
+        run = _const_run_mask(x, run_len)
+        env = float(np.percentile(np.abs(x), 99.9)) if n else 0.0
+        clip_level = max(0.9 * env, 2.0)            # a clip flat sits at the amplitude ceiling
+        ax = np.abs(x)
+        clip = sat | (run & (ax >= clip_level))     # exclude near-zero/suppression flats
+        flatz = run & (ax < clip_level)             # near-zero / coarse-resolution flats
         t = b["t_start"] + np.arange(n) / fs
         mins.append((t / 60.0).astype(int))
-        sats.append(sat)
+        clips.append(clip.astype(float))
+        flatzs.append(flatz.astype(float))
     if not mins:
         return None
     mn = np.concatenate(mins)
-    sat = np.concatenate(sats)
+    cl = np.concatenate(clips)
+    fz = np.concatenate(flatzs)
     nbins = int(mn.max()) + 1
     tot = np.bincount(mn, minlength=nbins).astype(float)
-    clp = np.bincount(mn, weights=sat, minlength=nbins)
+    clp = np.bincount(mn, weights=cl, minlength=nbins)
     valid = tot > 0
     pct = np.zeros(nbins)
     pct[valid] = 100.0 * clp[valid] / tot[valid]
     over = int(np.sum(pct[valid] > thresh_pct))
+    excl = int(np.sum(pct[valid] > exclude_pct))
+    flat_zero = float(100.0 * fz.sum() / tot.sum()) if tot.sum() else 0.0
     return {"max_epoch_pct": round(float(pct[valid].max()) if valid.any() else 0.0, 1),
-            "epochs_over_pct": over, "n_epochs": int(valid.sum()),
-            "thresh_pct": thresh_pct, "high": bool(over > 0)}
+            "epochs_over_pct": over, "epochs_to_exclude": excl, "exclude_pct": exclude_pct,
+            "flat_zero_pct": round(flat_zero, 2),
+            "n_epochs": int(valid.sum()), "thresh_pct": thresh_pct, "high": bool(over > 0)}
 
 
-def _quant_flag(blocks, fs, step_coarse_uv=2.0):
-    # Point 3: coarse amplitude quantization -> inflated high-frequency/beta power.
+def _quant_flag(blocks, fs, step_coarse_uv=2.0, min_levels=20):
+    # Point 4 (quantization): coarse amplitude resolution -> few distinct values -> white-noise
+    # injection inflating high-frequency/beta power (Bennett 1948; Bogli 2024). Reports the
+    # effective step, the von Dincklage "number of states", and a scale-free effective-levels count.
     parts = [np.asarray(b["x"], dtype=float) for b in blocks if len(b["x"])]
     if not parts:
         return None
@@ -434,14 +497,76 @@ def _quant_flag(blocks, fs, step_coarse_uv=2.0):
         med_states = int(np.median(states))
     else:
         med_states = int(u.size)
+    p2p = float(np.percentile(xs, 99) - np.percentile(xs, 1))
+    levels = int(round(p2p / step)) if step > 1e-9 else None
+    bits = round(float(np.log2(levels)), 1) if (levels is not None and levels > 1) else None
     zeroline = float(100.0 * np.mean(np.abs(xs) < max(step, 1e-6) / 2))
+    coarse = bool(step >= step_coarse_uv or (levels is not None and levels < min_levels))
     return {"step_uv": round(step, 3), "distinct_states": med_states,
-            "zeroline_pct": round(zeroline, 2), "coarse": bool(step >= step_coarse_uv)}
+            "effective_levels": levels, "effective_bits": bits,
+            "zeroline_pct": round(zeroline, 2), "coarse": coarse}
+
+
+def _resolution_change_flag(blocks, fs):
+    # Point 3 (resolution change within a recording): the vertical scale (uV/mm) was changed
+    # mid-recording -> a step-change in the effective quantization step. Detected as a sustained
+    # ~2x change in the per-minute effective step (von Dincklage 2021; Bogli 2024).
+    allx, allmin = [], []
+    for b in blocks:
+        x = np.asarray(b["x"], dtype=float)
+        n = x.size
+        if n == 0:
+            continue
+        t = b["t_start"] + np.arange(n) / fs
+        allx.append(x)
+        allmin.append((t / 60.0).astype(int))
+    if not allx:
+        return None
+    x = np.concatenate(allx)
+    mn = np.concatenate(allmin)
+    nb = int(mn.max()) + 1
+    edges = np.searchsorted(mn, np.arange(nb + 1))      # mn is non-decreasing
+    steps, tmin = [], []
+    one_s = int(round(fs))
+    for m in range(nb):
+        xm = x[edges[m]:edges[m + 1]]
+        if xm.size < one_s:
+            continue
+        u = np.unique(np.round(xm, 3))
+        dd = np.diff(u)
+        dd = dd[dd > 1e-6]
+        if dd.size:
+            steps.append(float(np.median(dd)))
+            tmin.append(m + 0.5)
+    if len(steps) < 12:
+        return None
+    sv = np.array(steps)
+    tv = np.array(tmin)
+    sm = sv.copy()
+    for i in range(1, sv.size - 1):
+        sm[i] = np.median(sv[i - 1:i + 2])
+    half = 6
+    best = None
+    for i in range(half, sm.size - half):
+        before = float(np.median(sm[i - half:i]))
+        after = float(np.median(sm[i:i + half]))
+        if before <= 1e-9:
+            continue
+        ratio = after / before
+        if ratio >= 1.8 or ratio <= 0.55:
+            score = abs(np.log2(ratio))
+            if best is None or score > best[0]:
+                best = (score, float(tv[i]), ratio, before, after)
+    if best is None:
+        return None
+    _, at, ratio, before, after = best
+    return {"at_min": round(at, 1), "ratio": round(ratio, 2),
+            "step_before_uv": round(before, 3), "step_after_uv": round(after, 3)}
 
 
 def qc_flags(blocks, fs, resolution_uv, dsa=None):
     # SedLine display-export QC screens (detect-and-flag only; no data is altered).
-    out = {"sweep_step": None, "clip": None, "quant": None}
+    out = {"sweep_step": None, "clip": None, "quant": None, "resolution_change": None}
     try:
         out["sweep_step"] = _sweep_step_flag(dsa)
     except Exception:
@@ -454,6 +579,10 @@ def qc_flags(blocks, fs, resolution_uv, dsa=None):
         out["quant"] = _quant_flag(blocks, fs)
     except Exception:
         out["quant"] = None
+    try:
+        out["resolution_change"] = _resolution_change_flag(blocks, fs)
+    except Exception:
+        out["resolution_change"] = None
     return out
 
 def self_test(fs=256.0, seconds=120.0):
@@ -905,6 +1034,40 @@ def drop_short_runs(mask, min_len):
     return out
 
 
+def _bridge_runs(mask, gap):
+    """Join True runs separated by <= gap samples (rebuild a fragmented episode)."""
+    out = mask.copy()
+    s, e = _runs(mask)
+    for k in range(len(s) - 1):
+        if s[k + 1] - e[k] <= gap:
+            out[e[k]:s[k + 1]] = True
+    return out
+
+
+def _device_check_islands(supp, fs, cfg):
+    """Samples of an isolated short low-amplitude island (device impedance check),
+    treated as not analysable rather than cerebral suppression. After bridging
+    sub-gaps, a merged run qualifies when it is at most bsr_imp_max_s long and is
+    separated from any neighbouring suppression by at least bsr_imp_isolation_s of
+    analysed EEG on both sides. Trains of genuine burst-suppression (episodes
+    seconds apart) and sustained suppression (longer than bsr_imp_max_s) are kept."""
+    out = np.zeros_like(supp)
+    if not supp.any():
+        return out
+    merged = _bridge_runs(supp, int(round(cfg["bsr_imp_bridge_s"] * fs)))
+    s, e = _runs(merged)
+    mx = int(round(cfg["bsr_imp_max_s"] * fs))
+    iso = int(round(cfg["bsr_imp_isolation_s"] * fs))
+    for k in range(len(s)):
+        if e[k] - s[k] > mx:
+            continue
+        gap_before = s[k] - (e[k - 1] if k > 0 else -10**12)
+        gap_after = (s[k + 1] if k < len(s) - 1 else 10**12) - e[k]
+        if gap_before >= iso and gap_after >= iso:
+            out[s[k]:e[k]] = True
+    return out
+
+
 def bsr_analysis(sess, window_min=None, cfg=CFG):
     """BSR over the whole session or a [start, end) minute window, with a per-minute
     trend and amplitude diagnostics of the detected episodes (desktop bsr.bsr_analysis)."""
@@ -915,6 +1078,8 @@ def bsr_analysis(sess, window_min=None, cfg=CFG):
     times, supp_all, det_all, episodes, pp, rms = [], [], [], [], [], []
     for b in sess["blocks"]:
         x = np.asarray(b["x"], dtype=float)
+        if x.size < int(round(fs)):   # block shorter than one second: too short for a BSR episode
+            continue
         sat = np.asarray(b["sat"], dtype=bool)
         indet = sat | stuck_mask(x, sat, fs, cfg["qc_stuck_s"])
         xf = clean(x, fs, cfg)
@@ -951,10 +1116,11 @@ def bsr_analysis(sess, window_min=None, cfg=CFG):
 
     pp = np.array(pp)
     return {
-        "method": "line length + amplitude (v3): R1, filtered, centred window",
+        "method": "line length + amplitude (v3): R1, filtered, centred window; isolated low-amplitude device checks counted as indeterminate",
         "window_min": window_min,
         "settings": {"window_s": cfg["bsr_ll_window_s"], "threshold_uv": cfg["bsr_ll_threshold_uv"],
-                     "amplitude_uv": cfg.get("bsr_amp_uv"), "min_episode_s": cfg["bsr_min_episode_s"]},
+                     "amplitude_uv": cfg.get("bsr_amp_uv"), "min_episode_s": cfg["bsr_min_episode_s"],
+                     "device_check_max_s": cfg["bsr_imp_max_s"], "device_check_isolation_s": cfg["bsr_imp_isolation_s"]},
         "bsr_pct": _num(100 * supp.sum() / n_det, 3) if n_det else None,
         "suppression_min": _num(float(supp.sum()) / fs / 60, 2),
         "analysed_min": _num(float(n_det) / fs / 60, 2),
@@ -982,7 +1148,14 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
     sess = {"fs": fs, "resolution_uv": resolution_uv, "blocks": blocks}
     m = find_maintenance(sess, manual_window, preset)
     if m.get("verdict") not in ("complete", "manual"):
-        return {"verdict": "rejected", "maintenance": m, "reasons": m.get("reasons", [])}
+        # Maintenance window could not be established (e.g. induction not recorded).
+        # Fall back to the whole-recording review so the DSA, band-power and BSR
+        # panels still render; carry the maintenance reasons so the UI can note
+        # that no validated maintenance window was found.
+        result = run_review(blocks, fs, resolution_uv, preset)
+        result["report_verdict"] = "rejected"
+        result["report_reasons"] = m.get("reasons", [])
+        return result
     result = run_session(blocks, fs, preset, m["window"])
     result.update(verdict=m["verdict"], maintenance=m)
     try:
@@ -994,12 +1167,16 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
         result["band_trend"] = None
     try:
         result["bsr"] = bsr_analysis(sess, m["window"], CFG)
-    except Exception:
+    except Exception as _e:
+        import traceback as _tb
         result["bsr"] = None
+        result["bsr_error"] = f"{type(_e).__name__}: {_e} | " + _tb.format_exc().strip().replace(chr(10), " ~ ")[-600:]
     try:
         result["bsr_trend"] = _bsr_trend_obj(bsr_analysis(sess, None, CFG)["trend_per_min_pct"])
-    except Exception:
+    except Exception as _e:
+        import traceback as _tb
         result["bsr_trend"] = None
+        result["bsr_trend_error"] = f"{type(_e).__name__}: {_e} | " + _tb.format_exc().strip().replace(chr(10), " ~ ")[-600:]
     try:
         result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
     except Exception:

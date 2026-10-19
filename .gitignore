@@ -26,3 +26,7 @@ Thumbs.db
 ## NuGet
 *.nupkg
 packages/
+
+# session backups / scratch (not source)
+*.bak_*
+_to_delete/

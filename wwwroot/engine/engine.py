@@ -1035,9 +1035,14 @@ def drop_short_runs(mask, min_len):
 
 
 def _bridge_runs(mask, gap):
-    """Join True runs separated by <= gap samples (rebuild a fragmented episode)."""
+    """Join True runs separated by <= gap samples (rebuild a fragmented episode).
+    All run indices are cast to plain Python ints to keep slicing/arithmetic
+    numpy-scalar-free (defensive for the WASM/Pyodide numpy build)."""
     out = mask.copy()
-    s, e = _runs(mask)
+    rs, re_ = _runs(mask)
+    s = [int(v) for v in rs]
+    e = [int(v) for v in re_]
+    gap = int(gap)
     for k in range(len(s) - 1):
         if s[k + 1] - e[k] <= gap:
             out[e[k]:s[k + 1]] = True
@@ -1050,19 +1055,25 @@ def _device_check_islands(supp, fs, cfg):
     sub-gaps, a merged run qualifies when it is at most bsr_imp_max_s long and is
     separated from any neighbouring suppression by at least bsr_imp_isolation_s of
     analysed EEG on both sides. Trains of genuine burst-suppression (episodes
-    seconds apart) and sustained suppression (longer than bsr_imp_max_s) are kept."""
-    out = np.zeros_like(supp)
-    if not supp.any():
+    seconds apart) and sustained suppression (longer than bsr_imp_max_s) are kept.
+    Indices are plain Python ints (no numpy-scalar arithmetic, no huge sentinels)."""
+    out = np.zeros(int(supp.shape[0]), dtype=bool)
+    if not bool(supp.any()):
         return out
     merged = _bridge_runs(supp, int(round(cfg["bsr_imp_bridge_s"] * fs)))
-    s, e = _runs(merged)
+    rs, re_ = _runs(merged)
+    s = [int(v) for v in rs]
+    e = [int(v) for v in re_]
+    n = len(s)
+    if n == 0:
+        return out
     mx = int(round(cfg["bsr_imp_max_s"] * fs))
     iso = int(round(cfg["bsr_imp_isolation_s"] * fs))
-    for k in range(len(s)):
+    for k in range(n):
         if e[k] - s[k] > mx:
             continue
-        gap_before = s[k] - (e[k - 1] if k > 0 else -10**12)
-        gap_after = (s[k + 1] if k < len(s) - 1 else 10**12) - e[k]
+        gap_before = (s[k] - e[k - 1]) if k > 0 else iso
+        gap_after = (s[k + 1] - e[k]) if k < n - 1 else iso
         if gap_before >= iso and gap_after >= iso:
             out[s[k]:e[k]] = True
     return out
@@ -1087,6 +1098,9 @@ def bsr_analysis(sess, window_min=None, cfg=CFG):
         if cfg.get("bsr_amp_uv") is not None:
             cand &= np.abs(xf) <= cfg["bsr_amp_uv"]
         supp = drop_short_runs(cand, min_len)
+        dev = _device_check_islands(supp, fs, cfg)
+        indet = indet | dev
+        supp = supp & ~dev
 
         t = b["t_start"] + np.arange(len(x)) / fs
         m = (t >= a) & (t < z)

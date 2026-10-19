@@ -76,7 +76,9 @@ export async function readVistaSpa(file) {
     return {
         n: rows.length,
         time: rows.map((r) => (r[0] || "").trim()),
-        bis: colByName((c) => c.startsWith("BIS")),
+        // BIS Vista exports the BIS index under the coded column "DB13U01" (per hemisphere + combined);
+        // "BiSmooth" (smoothing-rate setting) and "BISBIT" (status bits) also start with BIS - exclude them.
+        bis: colByName((c) => c.startsWith("DB13") || (c.startsWith("BIS") && !c.startsWith("BISMOOTH") && !c.startsWith("BISBIT"))),
         sef: colByName((c) => c.startsWith("SEF")),
         sr: colByName((c) => c.startsWith("SR") || c.includes("SUPP")),
         cols,

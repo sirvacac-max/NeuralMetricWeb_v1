@@ -1,7 +1,7 @@
 ﻿// wwwroot/js/session.js
 // Multi-file session intake. Same rules as the desktop intake.py and loader.py.
 import { readEdfHeader, readChannel, readAnnotations } from "./edf.js";
-import { readVistaHeader, readVistaRaw, readVistaSpa } from "./bisVista.js";
+import { readVistaHeader, readVistaRaw, readVistaSpa, readVistaEvents, readVistaStart } from "./bisVista.js";
 
 export const RULES = {
     maxGapS: 1.0,      // files this close are stitched into one block
@@ -354,6 +354,23 @@ export async function buildBisSession(triplet, channelIndex = 0) {
     const kept = trimBlocks([{ t_start: 0, x: [x], sat: [sat] }], fs, events);
     if (!kept.length) throw new Error("No usable EEG after flat-segment removal");
 
+    // Real recording start from the .t_a / .o_a sidecar, else the raw file's lastModified.
+    let t0ms = null;
+    if (triplet.t_a) { try { t0ms = await readVistaStart(triplet.t_a); } catch (e) { } }
+    if (t0ms == null) t0ms = (triplet.raw && triplet.raw.lastModified) || Date.now();
+
+    // BIS Vista event log (.e_a) -> annotations on the session clock.
+    let annotations = [];
+    if (triplet.e_a) {
+        try {
+            const evs = await readVistaEvents(triplet.e_a, t0ms);
+            annotations = evs.map((e) => ({
+                time_min: r(e.onset_s / 60, 3), onset_s: r(e.onset_s, 2),
+                duration_s: e.duration_s, text: e.text, file: triplet.name || "BIS",
+            }));
+        } catch (e) { }
+    }
+
     const stitchLog = [{
         file: triplet.name || "BIS case", start_min: 0, duration_min: r(durS / 60),
         clipped_pct: r((100 * nSat) / n, 3), gap_before_s: null,
@@ -365,7 +382,7 @@ export async function buildBisSession(triplet, channelIndex = 0) {
         low_fs: fs < 84.21, low_fs_hz: r(fs, 1), band_hi_hz: r(Math.min(40, 0.95 * fs / 2), 1),
         blocks_dropped: events.filter((e) => e.type === "block_dropped").length,
         segments_trimmed: events.filter((e) => e.type === "trimmed").length,
-        max_clipped_pct: r((100 * nSat) / n, 2), annotations_count: 0,
+        max_clipped_pct: r((100 * nSat) / n, 2), annotations_count: annotations.length,
     };
 
     // Device monitor trends (1 Hz), indexed by second.
@@ -377,7 +394,6 @@ export async function buildBisSession(triplet, channelIndex = 0) {
         } catch (e) { }
     }
 
-    const t0ms = (triplet.raw.lastModified) || Date.now();
     return {
         channel: avail[ci], channels_available: avail, source: "bis", device,
         fs, resolution_uv: hdr.gain[ci],
@@ -386,6 +402,6 @@ export async function buildBisSession(triplet, channelIndex = 0) {
         files_used: 1, files_total: 1,
         recorded_min: r(durS / 60),
         analysable_min: r(kept.reduce((s2, b) => s2 + b.x.length, 0) / fs / 60),
-        stitch_log: stitchLog, quality, annotations: [], events, gaps: [], blocks: kept,
+        stitch_log: stitchLog, quality, annotations, events, gaps: [], blocks: kept,
     };
 }

@@ -65,7 +65,11 @@ function pickBisTriplet(files) {
     if (!raw) return null;
     const spa = files.find((f) => lower(f).endsWith(".spa") && stem(f.name) === base)
              || files.find((f) => lower(f).endsWith(".spa"));
-    return { h_a: ha, raw, spa, name: base };
+    const byExt = (ext) => files.find((f) => lower(f).endsWith(ext) && stem(f.name) === base)
+                        || files.find((f) => lower(f).endsWith(ext));
+    const e_a = byExt(".e_a");   // event log (clinician / monitor markers)
+    const t_a = byExt(".t_a") || byExt(".o_a");   // true recording start time
+    return { h_a: ha, raw, spa, e_a: e_a || null, t_a: t_a || null, name: base };
 }
 
 // Analysis-channel options for the picker (BIS channels, or EDF EEG labels).

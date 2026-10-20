@@ -84,3 +84,49 @@ export async function readVistaSpa(file) {
         cols,
     };
 }
+
+// ---- BIS Vista event log (.e_a) and start-time (.t_a) sidecars ----
+// .e_a lines: "MM/DD/YYYY HH:MM:SS > CODE   |MM/DD/YYYY HH:MM:SS| message"
+// (or "MM/DD/YYYY HH:MM:SS > free text"). .t_a / .o_a carry the true recording start.
+function parseEaDate(s) {
+    const m = (s || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+    if (!m) return null;
+    return new Date(+m[3], +m[1] - 1, +m[2], +m[4], +m[5], +m[6]).getTime();
+}
+
+// Recording start (ms epoch) from a .t_a (or .o_a) file; null if unreadable.
+export async function readVistaStart(file) {
+    try {
+        const text = await file.text();
+        for (const l of text.split(/\r?\n/)) {
+            const t = parseEaDate(l);
+            if (t != null) return t;
+        }
+    } catch (e) { }
+    return null;
+}
+
+// Events from a .e_a file. onset_s is relative to startMs (the recording start).
+export async function readVistaEvents(file, startMs) {
+    const out = [];
+    let text;
+    try { text = await file.text(); } catch (e) { return out; }
+    for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        const gt = line.indexOf(" > ");
+        if (gt < 0) continue;
+        const tms = parseEaDate(line.slice(0, gt));
+        if (tms == null) continue;
+        const rest = line.slice(gt + 3).trim();
+        let txt = rest;
+        if (rest.includes("|")) {
+            const parts = rest.split("|");
+            const code = (parts[0] || "").trim();
+            txt = parts.slice(2).join("|").trim() || code;
+        }
+        if (!txt) continue;
+        out.push({ onset_s: startMs != null ? (tms - startMs) / 1000 : 0, duration_s: null, text: txt });
+    }
+    return out;
+}

@@ -646,6 +646,46 @@ def _fs_report(fs):
             "resample_needed_for_comparison": bool(abs(fs - common) > 1.0)}
 
 
+def qc_composition(blocks, fs, preset="v3_default", cfg=CFG):
+    """Signal-composition QC summary over all 4 s windows, from the 4 QC gates:
+    eCR = clipping ratio (saturation / over-amplitude), eFR = flat-line ratio
+    (flat SD < 0.5 uV / stuck), eTR = true analysable EEG ratio. The three sum to
+    100 % of the windowed recording. A simple report that keeps the same gates."""
+    nw, step = _window_geometry(fs, cfg)
+    if nw <= 0 or step <= 0:
+        return None
+    n_clip = 0
+    n_flat = 0
+    n_true = 0
+    for b in blocks:
+        p = prepare_block(np.asarray(b["x"], dtype=float), np.asarray(b["sat"], dtype=bool), fs, cfg)
+        n = len(p["x"])
+        if n < nw:
+            continue
+        starts = np.arange(0, n - nw + 1, step)
+        for c in range(0, len(starts), CHUNK):
+            s = starts[c:c + CHUNK]
+            idx = s[:, None] + np.arange(nw)[None, :]
+            W = p["x"][idx]
+            W = W - W.mean(axis=1, keepdims=True)
+            sd = W.std(axis=1)
+            amp = np.abs(W).max(axis=1)
+            satw = p["sat"][idx].any(axis=1)
+            stuckw = p["stuck"][idx].any(axis=1)
+            clip = satw | (amp > cfg["qc_max_uv"])
+            flat = (~clip) & ((sd < cfg["qc_min_sd_uv"]) | stuckw)
+            n_clip += int(clip.sum())
+            n_flat += int(flat.sum())
+            n_true += int((~(clip | flat)).sum())
+    total = n_clip + n_flat + n_true
+    if total == 0:
+        return None
+    return {"window_s": cfg["qc_win_s"], "n_windows": int(total),
+            "eCR_pct": round(100.0 * n_clip / total, 2),
+            "eFR_pct": round(100.0 * n_flat / total, 2),
+            "eTR_pct": round(100.0 * n_true / total, 2)}
+
+
 def qc_flags(blocks, fs, resolution_uv, dsa=None):
     # SedLine display-export QC screens (detect-and-flag only; no data is altered).
     out = {"sweep_step": None, "clip": None, "quant": None, "resolution_change": None,
@@ -1351,6 +1391,10 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
         result["bsr_trend_error"] = f"{type(_e).__name__}: {_e} | " + _tb.format_exc().strip().replace(chr(10), " ~ ")[-600:]
     _attach_adaptive_bsr(result, sess, m["window"], CFG)
     try:
+        result["qc_composition"] = qc_composition(blocks, fs, preset)
+    except Exception:
+        result["qc_composition"] = None
+    try:
         result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
     except Exception:
         result["qc_flags"] = None
@@ -1391,6 +1435,10 @@ def run_review(blocks, fs, resolution_uv, preset="v3_default"):
         result["bsr"] = None
         result["bsr_trend"] = None
     _attach_adaptive_bsr(result, sess, None, CFG)
+    try:
+        result["qc_composition"] = qc_composition(blocks, fs, preset)
+    except Exception:
+        result["qc_composition"] = None
     try:
         result["qc_flags"] = qc_flags(blocks, fs, resolution_uv, result.get("dsa"))
     except Exception:

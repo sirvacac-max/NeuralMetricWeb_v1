@@ -56,3 +56,23 @@ data; full result is JSON-serialisable. In-browser check on a real recording
 Home.razor can surface: a "monitor pre-filtering" note, the comparability line,
 the adaptive-BSR comparison when it diverges, and gap markers on the DSA/timeline.
 Data plumbing is in place; rendering is the remaining step.
+
+## Update — 2026-10-20
+
+### Signal-quality report (eCR / eFR / eTR)
+`qc_composition()` classifies every 4 s QC window using the existing gates and
+reports three ratios that sum to 100 %: **eCR** (clipping = saturation /
+over-amplitude > 150 µV), **eFR** (flat-line = SD < 0.5 µV / stuck), **eTR**
+(true analysable EEG). Attached to the result as `qc_composition`; shown as a
+headline panel above the detailed quality notes (which are kept). Verified on
+synthetic data (eCR/eFR/eTR sum to 100 %).
+
+### BIS Vista annotations
+BIS exports a text event log `.e_a` (and a `.t_a`/`.o_a` start-time sidecar).
+`readVistaEvents`/`readVistaStart` parse them; `pickBisTriplet` now collects
+`.e_a` and `.t_a`, and `buildBisSession` emits annotations plus a true
+recording start (previously the raw file's lastModified). SedLine EDF+
+annotations were already shown; the events panel heading is now source-neutral
+("Device events"). Verified against a real `.e_a` (start 07:48:15; event parsed).
+
+Note: channel selection was intentionally kept (user request).

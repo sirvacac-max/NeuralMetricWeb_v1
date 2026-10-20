@@ -191,6 +191,19 @@
         }
     </section>
 
+    @if (QcComposition(raw) is { } qc)
+    {
+        <section class="card quality-card">
+            <h2 class="chart-title">@L["Signal quality report"]</h2>
+            <p class="chart-sub">@L["Share of the recording that is true EEG versus clipping or flat-line (from the 4 QC checks)."]</p>
+            <div class="summary-row">
+                <div class="stat"><span class="stat-k">@L["True EEG"] (eTR)</span><span class="stat-v">@qc.Etr %</span></div>
+                <div class="stat"><span class="stat-k">@L["Clipping"] (eCR)</span><span class="stat-v">@qc.Ecr %</span></div>
+                <div class="stat"><span class="stat-k">@L["Flat-line"] (eFR)</span><span class="stat-v">@qc.Efr %</span></div>
+            </div>
+        </section>
+    }
+
     @if (HasQualityConcern(raw))
     {
         <section class="card quality-card">
@@ -205,8 +218,8 @@
     @if (HasAnnotations(raw))
     {
         <section class="card annot-card">
-            <h2 class="chart-title">@L["Device events (EDF+ annotations)"]</h2>
-            <p class="chart-sub">@L["Markers recorded by the monitor in the EDF+ file."]</p>
+            <h2 class="chart-title">@L["Device events"]</h2>
+            <p class="chart-sub">@L["Markers recorded by the monitor."]</p>
             <table class="annot-table">
                 <tbody>
                     @foreach (var a in Annotations(raw))
@@ -804,6 +817,16 @@
         if (vals.Count == 0) return "\u2014";
         double med = vals.Count % 2 == 1 ? vals[vals.Count / 2] : (vals[vals.Count / 2 - 1] + vals[vals.Count / 2]) / 2;
         return med.ToString("0.#", CultureInfo.InvariantCulture);
+    }
+
+    private readonly record struct QcComp(string Ecr, string Efr, string Etr);
+    private QcComp? QcComposition(JsonElement raw)
+    {
+        if (!raw.TryGetProperty("qc_composition", out var q) || q.ValueKind != JsonValueKind.Object) return null;
+        var inv = CultureInfo.InvariantCulture;
+        string f(string k) => q.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetDouble().ToString("0.#", inv) : "—";
+        return new QcComp(f("eCR_pct"), f("eFR_pct"), f("eTR_pct"));
     }
 
     private bool HasQualityConcern(JsonElement raw) => QualityNotes(raw).Any();

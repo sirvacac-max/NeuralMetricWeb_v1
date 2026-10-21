@@ -118,6 +118,8 @@ public sealed class Localization
         ["Flat-line"] = "Línea plana",
         ["Recording quality"] = "Calidad del registro",
         ["Methods & references"] = "Métodos y referencias",
+        ["Analysis methods & references"] = "Métodos de análisis y referencias",
+        ["Analysis used a zero-phase 0.5-40 Hz band-pass and 60 Hz notch; Welch PSD on 4 s Hann windows (50% overlap); band powers (absolute and relative), SEF95 and DSA; burst suppression by line length and amplitude; and an openibis-based composite. See the NeuralMetricsWeb methods guide for the full description."] = "El análisis usó un pasa-banda de fase cero 0.5-40 Hz y notch de 60 Hz; PSD de Welch en ventanas Hann de 4 s (50% de solape); potencias por banda (absoluta y relativa), SEF95 y DSA; brote-supresión por longitud de línea y amplitud; y un índice compuesto basado en openibis. Consulte la guía de métodos de NeuralMetricsWeb para la descripción completa.",
         ["Start time and timestamps are read from the EDF/EDF+ header (SedLine); for BIS from the .t_a/.o_a sidecar."] = "La hora de inicio y las marcas de tiempo se leen del encabezado EDF/EDF+ (SedLine); para BIS, del archivo .t_a/.o_a.",
         ["Each 4 s window is scored on the four QC gates; eCR/eFR/eTR summarise the clipping, flat-line and true-EEG share of the recording."] = "Cada ventana de 4 s se evalúa con los cuatro controles de calidad; eCR/eFR/eTR resumen la proporción de recorte, línea plana y EEG real del registro.",
         ["Events are read from the EDF+ annotation signal (SedLine) and the BIS .e_a event log."] = "Los eventos se leen de la señal de anotaciones EDF+ (SedLine) y del registro de eventos .e_a de BIS.",

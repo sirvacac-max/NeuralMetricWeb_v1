@@ -279,3 +279,15 @@ input[type="file"]::file-selector-button{font:inherit;font-weight:500;margin-rig
   .chart canvas{height:1.3in!important;}
   .report-foot{margin-top:4px!important;font-size:7pt!important;}
 }
+
+/* Per-panel methods & references (expandable) */
+.refbox{margin-top:12px;border-top:1px solid var(--line,#e0e8f0);padding-top:9px}
+.refbox summary{cursor:pointer;list-style:none;font-size:.8rem;font-weight:600;color:var(--accent,#0C7D88)}
+.refbox summary::-webkit-details-marker{display:none}
+.refbox summary::before{content:"\25B8  ";color:var(--muted,#51647a)}
+.refbox[open] summary::before{content:"\25BE  "}
+.refbox .ref-how{font-size:.82rem;color:var(--muted,#51647a);margin:9px 0 7px;line-height:1.5}
+.refbox .ref-list{margin:0;padding-left:18px}
+.refbox .ref-list li{font-size:.78rem;color:var(--muted,#51647a);margin:5px 0;line-height:1.55}
+.refbox .ref-list a{color:var(--accent,#0C7D88);text-decoration:none;word-break:break-word}
+.refbox .ref-list a:hover{text-decoration:underline}

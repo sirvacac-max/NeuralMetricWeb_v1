@@ -32,6 +32,7 @@
 
     <p class="panel-method">@L["Absolute power (µV²) is integrated band power and scales with the recording amplitude; relative power (%) does not."]</p>
     <p class="panel-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+    @BioRefBlock
 </section>
 
 @code {
@@ -57,4 +58,18 @@
 
     private static string Fmt(double value, string format) =>
         value.ToString(format, CultureInfo.InvariantCulture);
+
+    private MarkupString BioRefBlock
+    {
+        get
+        {
+            var how = System.Net.WebUtility.HtmlEncode(L["Band powers come from the Welch power spectrum of QC-valid EEG; relative values are each band as % of 0.5-30 Hz; SEF95 is the spectral edge frequency."]);
+            var sum = System.Net.WebUtility.HtmlEncode(L["Methods & references"]);
+            const string cites =
+                "<li>Purdon PL, et al. Clinical Electroencephalography for Anesthesiologists: Part I. <i>Anesthesiology.</i> 2015;123(4):937–960. <a href=\"https://doi.org/10.1097/ALN.0000000000000841\" target=\"_blank\" rel=\"noopener\">doi:10.1097/ALN.0000000000000841</a></li>"
+              + "<li>Welch PD. The use of FFT for the estimation of power spectra. <i>IEEE Trans Audio Electroacoust.</i> 1967;15(2):70–73. <a href=\"https://doi.org/10.1109/TAU.1967.1161901\" target=\"_blank\" rel=\"noopener\">doi:10.1109/TAU.1967.1161901</a></li>"
+              + "<li>Rampil IJ. A Primer for EEG Signal Processing in Anesthesia. <i>Anesthesiology.</i> 1998;89(4):980–1002. <a href=\"https://doi.org/10.1097/00000542-199810000-00023\" target=\"_blank\" rel=\"noopener\">doi:10.1097/00000542-199810000-00023</a></li>";
+            return new MarkupString($"<details class=\"refbox no-print\"><summary>{sum}</summary><p class=\"ref-how\">{how}</p><ul class=\"ref-list\">{cites}</ul></details>");
+        }
+    }
 }

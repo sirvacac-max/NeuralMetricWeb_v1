@@ -189,6 +189,7 @@
                 <p class="alert alert-warn" role="alert">@L["Flag:"] @LocalizeMsg(s)</p>
             }
         }
+        @RefBlock("header")
     </section>
 
     @if (QcComposition(raw) is { } qc)
@@ -201,6 +202,7 @@
                 <div class="stat"><span class="stat-k">@L["Clipping"] (eCR)</span><span class="stat-v">@qc.Ecr %</span></div>
                 <div class="stat"><span class="stat-k">@L["Flat-line"] (eFR)</span><span class="stat-v">@qc.Efr %</span></div>
             </div>
+            @RefBlock("quality")
         </section>
     }
 
@@ -212,6 +214,7 @@
             {
                 <p class="alert alert-warn" role="alert">@note</p>
             }
+            @RefBlock("quality")
         </section>
     }
 
@@ -228,6 +231,7 @@
                     }
                 </tbody>
             </table>
+            @RefBlock("annot")
         </section>
     }
 
@@ -269,6 +273,7 @@
                     </div>
                 }
                 <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+                @RefBlock("composite")
             </section>
         }
 
@@ -287,6 +292,7 @@
                 </div>
                 <div id="chart-dsa" class="chart"></div>
                 <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+                @RefBlock("dsa")
             </section>
         }
 
@@ -318,6 +324,7 @@
                 <div id="chart-psd" class="chart"></div>
                 <p class="chart-method">@L["Absolute shows each band's power in dB (10 log10 of band power in µV², scale-dependent). Relative shows each band as % of total 0.5-30 Hz power (scale-independent). The toggle changes only the y-axis; the time axis is shared with the composite and DSA."]</p>
                 <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+                @RefBlock("band")
             </section>
         }
 
@@ -343,6 +350,7 @@
                 <div id="chart-bsr" class="chart"></div>
                 <p class="chart-method">@L["A sample counts as suppression when its local line length and amplitude stay low for at least 1 s; saturated or stuck samples are indeterminate and excluded. BSR is the % of determinate EEG in suppression; the trend is per minute on the shared timeline."]</p>
                 <p class="chart-foot">@L["For educational and research use only. Do not use for clinical decisions alone - always combine with other clinical signs and monitoring parameters."]</p>
+                @RefBlock("bsr")
             </section>
         }
         </div>
@@ -370,6 +378,7 @@
                 </div>
                 <div id="chart-raw" class="chart"></div>
                 <p class="chart-method">@L["Click any chart above to move the cursor. The dashed line marks the selected instant; the vertical scale is the selected µV above and below zero."]</p>
+                @RefBlock("raw")
             </section>
         }
     }
@@ -827,6 +836,39 @@
         string f(string k) => q.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetDouble().ToString("0.#", inv) : "—";
         return new QcComp(f("eCR_pct"), f("eFR_pct"), f("eTR_pct"));
+    }
+
+    // --- Per-panel methods & references (expandable under each panel) ---
+    private const string _refEdf = "Kemp B, et al. A simple format for exchange of digitized polygraphic recordings. <i>Electroencephalogr Clin Neurophysiol.</i> 1992;82(5):391–393. <a href=\"https://doi.org/10.1016/0013-4694(92)90009-7\" target=\"_blank\" rel=\"noopener\">doi:10.1016/0013-4694(92)90009-7</a>";
+    private const string _refEdfp = "Kemp B, Oliván J. European data format 'plus' (EDF+). <i>Clin Neurophysiol.</i> 2003;114(9):1755–1761. <a href=\"https://doi.org/10.1016/S1388-2457(03)00123-8\" target=\"_blank\" rel=\"noopener\">doi:10.1016/S1388-2457(03)00123-8</a>";
+    private const string _refDinck = "von Dincklage F, et al. <i>J Clin Monit Comput.</i> 2021;35(5):1047–1054. <a href=\"https://doi.org/10.1007/s10877-020-00578-9\" target=\"_blank\" rel=\"noopener\">doi:10.1007/s10877-020-00578-9</a>";
+    private const string _refBogli = "Bøgli SY, et al. <i>Physiol Meas.</i> 2024;45(5):05NT02. <a href=\"https://doi.org/10.1088/1361-6579/ad46e4\" target=\"_blank\" rel=\"noopener\">doi:10.1088/1361-6579/ad46e4</a>";
+    private const string _refBennett = "Bennett WR. Spectra of quantized signals. <i>Bell Syst Tech J.</i> 1948;27(3):446–472. <a href=\"https://doi.org/10.1002/j.1538-7305.1948.tb01340.x\" target=\"_blank\" rel=\"noopener\">doi:10.1002/j.1538-7305.1948.tb01340.x</a>";
+    private const string _refPurdon = "Purdon PL, et al. Clinical Electroencephalography for Anesthesiologists: Part I. <i>Anesthesiology.</i> 2015;123(4):937–960. <a href=\"https://doi.org/10.1097/ALN.0000000000000841\" target=\"_blank\" rel=\"noopener\">doi:10.1097/ALN.0000000000000841</a>";
+    private const string _refWelch = "Welch PD. The use of FFT for the estimation of power spectra. <i>IEEE Trans Audio Electroacoust.</i> 1967;15(2):70–73. <a href=\"https://doi.org/10.1109/TAU.1967.1161901\" target=\"_blank\" rel=\"noopener\">doi:10.1109/TAU.1967.1161901</a>";
+    private const string _refRampil = "Rampil IJ. A Primer for EEG Signal Processing in Anesthesia. <i>Anesthesiology.</i> 1998;89(4):980–1002. <a href=\"https://doi.org/10.1097/00000542-199810000-00023\" target=\"_blank\" rel=\"noopener\">doi:10.1097/00000542-199810000-00023</a>";
+    private const string _refConnor = "Connor CW. Open Reimplementation of the BIS Algorithms for Depth of Anesthesia. <i>Anesth Analg.</i> 2022;135(4):855–864. <a href=\"https://doi.org/10.1213/ANE.0000000000006119\" target=\"_blank\" rel=\"noopener\">doi:10.1213/ANE.0000000000006119</a>";
+    private const string _refSarkela = "Särkelä M, et al. Automatic analysis and monitoring of burst suppression in anesthesia. <i>J Clin Monit Comput.</i> 2002;17(2):125–134. <a href=\"https://doi.org/10.1023/A:1016393904439\" target=\"_blank\" rel=\"noopener\">doi:10.1023/A:1016393904439</a>";
+
+    private static readonly Dictionary<string, (string How, string[] Cites)> _refs = new()
+    {
+        ["header"] = ("Start time and timestamps are read from the EDF/EDF+ header (SedLine); for BIS from the .t_a/.o_a sidecar.", new[] { _refEdf, _refEdfp }),
+        ["quality"] = ("Each 4 s window is scored on the four QC gates; eCR/eFR/eTR summarise the clipping, flat-line and true-EEG share of the recording.", new[] { _refDinck, _refBogli, _refBennett }),
+        ["annot"] = ("Events are read from the EDF+ annotation signal (SedLine) and the BIS .e_a event log.", new[] { _refEdfp }),
+        ["composite"] = ("A pEEG composite index adapted from the open openibis reimplementation of the depth-of-anaesthesia algorithm.", new[] { _refConnor }),
+        ["dsa"] = ("A spectrogram of power over time and frequency (median of QC-valid windows per 30 s); the white line is SEF95.", new[] { _refPurdon, _refRampil }),
+        ["band"] = ("Band powers over the session from the Welch power spectrum, shown as absolute (dB) or relative (%).", new[] { _refPurdon, _refWelch }),
+        ["bsr"] = ("Burst suppression is detected from local line length and amplitude; BSR is the % of determinate EEG in suppression.", new[] { _refSarkela, _refRampil }),
+        ["raw"] = ("The unfiltered recorded waveform, for visual review against the computed metrics.", new[] { _refPurdon }),
+    };
+
+    private MarkupString RefBlock(string key)
+    {
+        if (!_refs.TryGetValue(key, out var r)) return new MarkupString("");
+        var lis = string.Concat(r.Cites.Select(c => $"<li>{c}</li>"));
+        var html = $"<details class=\"refbox no-print\"><summary>{System.Net.WebUtility.HtmlEncode(L["Methods & references"])}</summary>"
+                 + $"<p class=\"ref-how\">{System.Net.WebUtility.HtmlEncode(L[r.How])}</p><ul class=\"ref-list\">{lis}</ul></details>";
+        return new MarkupString(html);
     }
 
     private bool HasQualityConcern(JsonElement raw) => QualityNotes(raw).Any();

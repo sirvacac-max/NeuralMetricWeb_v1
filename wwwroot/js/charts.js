@@ -280,7 +280,7 @@ function drawDSA(el, data, labels) {
     const ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = c.surface2; ctx.fillRect(m.l, m.t, pw, ph);
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
     const dataMax = data.time_min[data.time_min.length - 1] + data.bin_s / 120;
     const xMax = (labels && labels.xMax) ? labels.xMax : dataMax;
     const imgW = dataMax / (xMax || 1) * pw;

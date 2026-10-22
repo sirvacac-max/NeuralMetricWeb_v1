@@ -283,6 +283,20 @@ def dsa(blocks, fs, preset="v3_default", bin_s=30.0, cfg=CFG):
     }
 
 
+def _dsa_bin_s(blocks, fs, target_cols=360.0, lo=2.0, hi=30.0):
+    """Adaptive DSA/band time-bin: aim for ~target_cols columns so that short
+    recordings are not drawn as a few wide blocks. Clamped to [lo, hi] seconds."""
+    try:
+        t0 = min(float(b["t_start"]) for b in blocks)
+        t1 = max(float(b["t_start"]) + len(b["x"]) / fs for b in blocks)
+        span = t1 - t0
+        if span <= 0:
+            return hi
+        return float(min(hi, max(lo, span / target_cols)))
+    except Exception:
+        return hi
+
+
 def spectral_trends(blocks, fs, preset="v3_default", bin_s=30.0, cfg=CFG):
     """Per-30-s trends over the whole recording: DSA columns and band powers
     (absolute uV2 and relative %) per time bin. Band-power trend = desktop trends.bands."""
@@ -1371,7 +1385,7 @@ def run_report(blocks, fs, resolution_uv, preset="v3_default", manual_window=Non
     result = run_session(blocks, fs, preset, m["window"])
     result.update(verdict=m["verdict"], maintenance=m)
     try:
-        tr = spectral_trends(blocks, fs, preset)
+        tr = spectral_trends(blocks, fs, preset, _dsa_bin_s(blocks, fs))
         result["dsa"] = tr["dsa"]
         result["band_trend"] = tr["bands"]
     except Exception:
@@ -1421,7 +1435,7 @@ def run_review(blocks, fs, resolution_uv, preset="v3_default"):
     result["maintenance"] = {"source": "review", "window": span, "verdict": "review",
                              "composite_trend": trend}
     try:
-        tr = spectral_trends(blocks, fs, preset)
+        tr = spectral_trends(blocks, fs, preset, _dsa_bin_s(blocks, fs))
         result["dsa"] = tr["dsa"]
         result["band_trend"] = tr["bands"]
     except Exception:
